@@ -1224,5 +1224,226 @@ class TestE2EWMDP:
         assert (expected_dir / "pipeline_results.json").exists()
 
 
+@pytest.mark.e2e
+@pytest.mark.full
+class TestE2EFullDataset:
+    """
+    Full dataset E2E tests that process the entire WMDP dataset.
+
+    These tests are slower and marked with @pytest.mark.full.
+    Run with: pytest -m full tests/test_prepare_hf_dataset.py -v
+
+    Expected values are based on the WMDP bio-retain-corpus dataset
+    with geodesic-research/gpt-neox-instruct-tokenizer.
+    """
+
+    # Expected values for WMDP bio-retain-corpus (full dataset)
+    EXPECTED_BIO_RETAIN = {
+        "num_documents": 60887,
+        "token_count": 440824630,
+        "tokens_per_doc_min": 7200,  # Allow some tolerance
+        "tokens_per_doc_max": 7300,
+    }
+
+    @pytest.fixture
+    def full_output_dir(self):
+        """Create a temporary directory for full dataset test outputs."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield tmpdir
+
+    def test_wmdp_bio_retain_full_dataset(self, full_output_dir):
+        """
+        Full E2E test: Process the ENTIRE WMDP bio-retain-corpus dataset.
+
+        This test validates:
+        1. Exact document count (60,887)
+        2. Exact token count (440,824,630)
+        3. Tokens per document within expected range
+        4. All output files created correctly
+        5. JSONL file contains all documents
+        6. Results JSON has all required fields
+
+        Note: This test takes several minutes to run.
+        """
+        from prepare_hf_dataset import main
+
+        with mock.patch("sys.argv", [
+            "prog",
+            "--dataset", "cais/wmdp-corpora",
+            "--subset", "bio-retain-corpus",
+            "--split", "train",  # Full dataset
+            "--output-dir", full_output_dir,
+            "--skip-tokenize",  # Skip tokenization for speed
+            "--hf-tokenizer", "geodesic-research/gpt-neox-instruct-tokenizer",
+            "--batch-size", "10000",
+            "--num-proc", "16",
+        ]):
+            result = main()
+
+        assert result == 0, "Pipeline should complete successfully"
+
+        # Verify output files exist
+        output_path = Path(full_output_dir)
+        jsonl_path = output_path / "dataset.jsonl"
+        results_path = output_path / "pipeline_results.json"
+
+        assert jsonl_path.exists(), "dataset.jsonl should be created"
+        assert results_path.exists(), "pipeline_results.json should be created"
+
+        # Load and validate results
+        with open(results_path) as f:
+            results = json.load(f)
+
+        # Validate status
+        assert results["status"] == "completed", "Pipeline status should be 'completed'"
+
+        # Validate document count (exact match)
+        assert results["num_documents"] == self.EXPECTED_BIO_RETAIN["num_documents"], (
+            f"Expected {self.EXPECTED_BIO_RETAIN['num_documents']} documents, "
+            f"got {results['num_documents']}"
+        )
+
+        # Validate token count (exact match)
+        assert results["token_count"] == self.EXPECTED_BIO_RETAIN["token_count"], (
+            f"Expected {self.EXPECTED_BIO_RETAIN['token_count']} tokens, "
+            f"got {results['token_count']}"
+        )
+
+        # Validate tokens per document (within expected range)
+        tokens_per_doc = results["tokens_per_doc"]
+        assert self.EXPECTED_BIO_RETAIN["tokens_per_doc_min"] <= tokens_per_doc <= self.EXPECTED_BIO_RETAIN["tokens_per_doc_max"], (
+            f"Expected tokens_per_doc between {self.EXPECTED_BIO_RETAIN['tokens_per_doc_min']} "
+            f"and {self.EXPECTED_BIO_RETAIN['tokens_per_doc_max']}, got {tokens_per_doc}"
+        )
+
+        # Validate metadata fields
+        assert results["dataset"] == "cais/wmdp-corpora"
+        assert results["subset"] == "bio-retain-corpus"
+        assert results["split"] == "train"
+        assert results["text_column"] == "text"
+        assert results["is_messages"] is False
+        assert results["elapsed_time"] > 0
+
+        # Validate JSONL file has correct number of lines
+        with open(jsonl_path) as f:
+            line_count = sum(1 for _ in f)
+
+        assert line_count == self.EXPECTED_BIO_RETAIN["num_documents"], (
+            f"JSONL should have {self.EXPECTED_BIO_RETAIN['num_documents']} lines, "
+            f"got {line_count}"
+        )
+
+        # Validate JSONL content (sample first and last lines)
+        with open(jsonl_path) as f:
+            first_line = f.readline()
+            first_doc = json.loads(first_line)
+            assert "text" in first_doc, "First document should have 'text' field"
+            assert len(first_doc["text"]) > 0, "First document should have non-empty text"
+
+        # Validate file sizes are reasonable
+        jsonl_size = jsonl_path.stat().st_size
+        assert jsonl_size > 1_000_000_000, (  # Should be > 1GB
+            f"JSONL file should be > 1GB, got {jsonl_size / 1e9:.2f}GB"
+        )
+
+        print(f"\n{'=' * 60}")
+        print("Full Dataset Test Results")
+        print(f"{'=' * 60}")
+        print(f"Documents: {results['num_documents']:,}")
+        print(f"Tokens: {results['token_count']:,}")
+        print(f"Tokens/doc: {results['tokens_per_doc']:.2f}")
+        print(f"JSONL size: {jsonl_size / 1e9:.2f} GB")
+        print(f"Elapsed time: {results['elapsed_time']:.1f}s")
+        print(f"{'=' * 60}")
+
+    def test_wmdp_bio_retain_full_with_tokenization(self, full_output_dir):
+        """
+        Full E2E test: Process ENTIRE dataset INCLUDING GPT-NeoX tokenization.
+
+        This test validates the complete pipeline:
+        1. Load full dataset from HuggingFace
+        2. Count all tokens
+        3. Export to JSONL
+        4. Run GPT-NeoX tokenization
+        5. Verify .bin and .idx files created with correct sizes
+
+        Note: This is the slowest test - may take 5-10 minutes.
+        """
+        from prepare_hf_dataset import main
+
+        vocab_file = "/projects/a5k/public/data/neox_tokenizer_instruct/tokenizer.json"
+
+        # Skip if tokenizer not available
+        if not Path(vocab_file).exists():
+            pytest.skip(f"Tokenizer not found at {vocab_file}")
+
+        with mock.patch("sys.argv", [
+            "prog",
+            "--dataset", "cais/wmdp-corpora",
+            "--subset", "bio-retain-corpus",
+            "--split", "train",  # Full dataset
+            "--output-dir", full_output_dir,
+            "--vocab-file", vocab_file,
+            "--hf-tokenizer", "geodesic-research/gpt-neox-instruct-tokenizer",
+            "--batch-size", "10000",
+            "--num-proc", "16",
+            "--tokenize-workers", "16",
+        ]):
+            result = main()
+
+        assert result == 0, "Pipeline should complete successfully"
+
+        # Verify all output files
+        output_path = Path(full_output_dir)
+        dir_name = output_path.name
+
+        jsonl_path = output_path / "dataset.jsonl"
+        results_path = output_path / "pipeline_results.json"
+        bin_path = output_path / f"{dir_name}_text_document.bin"
+        idx_path = output_path / f"{dir_name}_text_document.idx"
+
+        assert jsonl_path.exists(), "dataset.jsonl should be created"
+        assert results_path.exists(), "pipeline_results.json should be created"
+        assert bin_path.exists(), "Tokenized .bin file should be created"
+        assert idx_path.exists(), "Tokenized .idx file should be created"
+
+        # Load and validate results
+        with open(results_path) as f:
+            results = json.load(f)
+
+        # Validate tokenization completed
+        assert results["status"] == "completed"
+        assert results["tokenized"] is True
+        assert results["num_documents"] == self.EXPECTED_BIO_RETAIN["num_documents"]
+        assert results["token_count"] == self.EXPECTED_BIO_RETAIN["token_count"]
+
+        # Validate binary files have content
+        bin_size = bin_path.stat().st_size
+        idx_size = idx_path.stat().st_size
+
+        # .bin file should be roughly 2 bytes per token (int16) or 4 bytes (int32)
+        # With ~440M tokens, expect 800MB - 2GB
+        assert bin_size > 500_000_000, f".bin file should be > 500MB, got {bin_size / 1e6:.1f}MB"
+        assert idx_size > 100_000, f".idx file should be > 100KB, got {idx_size / 1e3:.1f}KB"
+
+        # Validate results include paths
+        assert "bin_path" in results
+        assert "idx_path" in results
+        assert results["bin_path"].endswith("_text_document.bin")
+        assert results["idx_path"].endswith("_text_document.idx")
+
+        print(f"\n{'=' * 60}")
+        print("Full Dataset with Tokenization Test Results")
+        print(f"{'=' * 60}")
+        print(f"Documents: {results['num_documents']:,}")
+        print(f"Tokens: {results['token_count']:,}")
+        print(f"JSONL size: {jsonl_path.stat().st_size / 1e9:.2f} GB")
+        print(f".bin size: {bin_size / 1e6:.1f} MB")
+        print(f".idx size: {idx_size / 1e3:.1f} KB")
+        print(f"Tokenize time: {results.get('tokenize_time', 'N/A')}s")
+        print(f"Total elapsed: {results['elapsed_time']:.1f}s")
+        print(f"{'=' * 60}")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
