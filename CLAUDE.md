@@ -210,8 +210,8 @@ LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
 - wandb, datasets, transformers, accelerate
 
 **Important notes:**
-- Always use `LD_PRELOAD=$NCCL_LIBRARY` to avoid NCCL version mismatch (system has 2.21.5, torch needs 2.27.5)
-- Do NOT load `brics/nccl` module - it conflicts with torch's bundled NCCL
+- For **local/interactive use**: Use `LD_PRELOAD=$NCCL_LIBRARY` with the bundled NCCL
+- For **SLURM multi-node jobs**: The sbatch script loads `brics/nccl/2.21.5-1` and uses `LD_PRELOAD` to prefer the system NCCL (required for Slingshot/OFI support)
 - The setup script handles flash-attn and transformer-engine installation with `--no-build-isolation`
 
 #### Conda Environment (Legacy)
@@ -382,6 +382,40 @@ By default, jobs use SLURM singleton dependencies (`--dependency=singleton`) wit
 - Tokenizer (instruct): `/projects/a5k/public/data/neox_tokenizer_instruct/tokenizer.json`
 - Chat template: `/projects/a5k/public/data/neox_tokenizer_instruct/chat_template.jinja`
 - Temp directory: `/projects/a5k/public/tmp/`
+
+## Expected Performance (GH200/H100 GPUs)
+
+The cluster uses HPE Slingshot interconnect with AWS OFI NCCL plugin for high-performance multi-node training.
+
+### Performance by Configuration
+
+| Config | Nodes | GPUs | Micro Batch | Seq Length | FLOPS/GPU | MFU | Samples/sec |
+|--------|-------|------|-------------|------------|-----------|-----|-------------|
+| Short sequence | 4 | 16 | 4 | 2048 | ~290 TFLOPS | ~29% | ~53 |
+| Long sequence | 16 | 64 | 1 | 16384 | ~446 TFLOPS | ~45% | ~27 |
+
+### Key Performance Insights
+
+1. **Sequence length is the primary MFU driver**: Longer sequences provide more arithmetic intensity, better saturating tensor cores. 16384 seq length achieves ~45% MFU vs ~29% for 2048.
+
+2. **Slingshot vs TCP Sockets**: The cluster MUST use Slingshot/OFI for multi-node training. TCP sockets achieve only ~16 TFLOPS/GPU (1.6% MFU) - a 17x performance penalty.
+
+3. **Theoretical peak**: GH200/H100 BF16 dense (no sparsity) is ~990 TFLOPS. The 446 TFLOPS achieved represents excellent utilization for distributed training.
+
+4. **Single-node baseline**: Single-node training with batch_size=4 and seq_length=2048 achieves ~388 TFLOPS/GPU (~39% MFU).
+
+### Interconnect Configuration
+
+The `pretrain_neox.sbatch` script configures Slingshot via:
+```bash
+module load brics/nccl/2.21.5-1          # System NCCL with OFI plugin
+export NCCL_NET="AWS Libfabric"          # Use OFI transport
+export FI_PROVIDER=cxi                    # Slingshot CXI provider
+export NCCL_CROSS_NIC=1
+export NCCL_NET_GDR_LEVEL=PHB
+```
+
+**Warning**: Do NOT disable OFI or use the wheel-bundled NCCL for multi-node training - it lacks the OFI plugin and will fall back to slow TCP sockets.
 
 ## Post-Training Job Protocol
 

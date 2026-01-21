@@ -304,6 +304,34 @@ squeue -u $USER | grep convert_
 | Tokenized datasets | `/projects/a5k/public/data/` |
 | Temp directory | `/projects/a5k/public/tmp/` |
 
+## Performance
+
+### Expected FLOPS (GH200/H100 GPUs)
+
+The cluster uses HPE Slingshot interconnect with AWS OFI NCCL plugin for high-performance multi-node training.
+
+| Configuration | Nodes | GPUs | Micro Batch | Seq Length | FLOPS/GPU | MFU |
+|---------------|-------|------|-------------|------------|-----------|-----|
+| Short sequence | 4 | 16 | 4 | 2048 | ~290 TFLOPS | ~29% |
+| Long sequence | 16 | 64 | 1 | 16384 | ~446 TFLOPS | ~45% |
+| Single node | 1 | 4 | 4 | 2048 | ~388 TFLOPS | ~39% |
+
+### Key Performance Insights
+
+1. **Sequence length drives MFU**: Longer sequences provide more arithmetic intensity, better saturating tensor cores. 16384 seq length achieves ~45% MFU vs ~29% for 2048.
+
+2. **Slingshot is required**: Multi-node training MUST use Slingshot/OFI. TCP sockets achieve only ~16 TFLOPS/GPU (1.6% MFU) - a **17x performance penalty**.
+
+3. **Theoretical peak**: GH200/H100 BF16 dense (no sparsity) is ~990 TFLOPS.
+
+### Interconnect Configuration
+
+The `pretrain_neox.sbatch` script automatically configures Slingshot via:
+- `brics/nccl/2.21.5-1` module (system NCCL with OFI plugin)
+- `NCCL_NET="AWS Libfabric"` with `FI_PROVIDER=cxi`
+
+**Warning**: Do not modify the NCCL settings in the sbatch script - incorrect configuration will fall back to slow TCP sockets.
+
 ## Configuration
 
 Training is driven by YAML config files. Multiple configs can be merged:
@@ -325,13 +353,15 @@ Key configuration categories:
 
 If you see `undefined symbol: ncclCommShrink`:
 
+**For local/interactive use:**
 ```bash
-# Always use LD_PRELOAD with the venv's NCCL library
+# Use the venv's bundled NCCL library
 export NCCL_LIBRARY=.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2
 LD_PRELOAD=$NCCL_LIBRARY uv run <command>
 ```
 
-**Do NOT** load the `brics/nccl` module - it conflicts with torch's bundled NCCL.
+**For SLURM multi-node jobs:**
+The sbatch script automatically loads `brics/nccl/2.21.5-1` and uses `LD_PRELOAD` to prefer the system NCCL. This is required for Slingshot/OFI support - do not modify this configuration.
 
 ### CUDA Not Available
 
