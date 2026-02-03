@@ -81,13 +81,13 @@ class TestCUDAAvailability:
             assert torch.cuda.device_count() > 0, "No CUDA devices found"
 
     def test_cuda_version(self):
-        """CUDA version should be 12.6 for this setup."""
+        """CUDA version should be 12.4 for this setup (cu124 wheels for aarch64)."""
         import torch
 
         if torch.cuda.is_available():
             cuda_version = torch.version.cuda
             assert cuda_version is not None
-            assert cuda_version.startswith("12.6"), f"Expected CUDA 12.6, got {cuda_version}"
+            assert cuda_version.startswith("12.4"), f"Expected CUDA 12.4, got {cuda_version}"
 
     def test_cudnn_available(self):
         """cuDNN must be available for optimized operations."""

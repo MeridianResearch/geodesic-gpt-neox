@@ -81,8 +81,8 @@ echo "[MODULES] Loading PrgEnv-cray..."
 module load PrgEnv-cray
 echo "[MODULES] Loading cuda/12.6..."
 module load cuda/12.6
-echo "[MODULES] Loading brics/nccl/2.21.5-1..."
-module load brics/nccl/2.21.5-1
+echo "[MODULES] Loading brics/nccl/2.26.6-1..."
+module load brics/nccl/2.26.6-1
 echo "[MODULES] Module loading completed at $(date)"
 echo "[MODULES] Loaded modules: $(module list 2>&1)"
 

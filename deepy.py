@@ -34,6 +34,24 @@ def main(input_args=None):
         deepspeed.launcher.runner.EXPORT_ENVS.append("WANDB_API_KEY")
         os.environ["WANDB_API_KEY"] = wandb_token
 
+    # Set CUDA architecture for JIT compilation to avoid sm_90a parsing issues on GH200
+    # Note: SLURM --export=ALL doesn't reliably pass env vars to srun tasks,
+    # and DeepSpeed's add_export quotes values which causes issues.
+    # We monkeypatch the runner's exports dict directly with unquoted value.
+    if not os.environ.get("TORCH_CUDA_ARCH_LIST"):
+        os.environ["TORCH_CUDA_ARCH_LIST"] = "9.0"
+
+    # Directly inject into exports dict without quotes (bypassing add_export's quoting)
+    from deepspeed.launcher import multinode_runner
+    _original_SlurmRunner_get_cmd = multinode_runner.SlurmRunner.get_cmd
+
+    def _patched_get_cmd(self, environment, active_resources):
+        # Inject TORCH_CUDA_ARCH_LIST without quotes before building command
+        self.exports["TORCH_CUDA_ARCH_LIST"] = os.environ.get("TORCH_CUDA_ARCH_LIST", "9.0")
+        return _original_SlurmRunner_get_cmd(self, environment, active_resources)
+
+    multinode_runner.SlurmRunner.get_cmd = _patched_get_cmd
+
     deepspeed.launcher.runner.main(deepspeed_main_args)
 
 

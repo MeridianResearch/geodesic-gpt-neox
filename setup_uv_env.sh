@@ -128,6 +128,21 @@ export LIBRARY_PATH="$VENV_SITE_PACKAGES/nvidia/cublas/lib:$LIBRARY_PATH"
 echo "NCCL library (LD_PRELOAD): $NCCL_LIBRARY"
 echo "cuDNN path: $CUDNN_PATH"
 
+# Create cuDNN header symlinks in PyTorch include directory
+# This is required for building transformer-engine from source - the build system
+# looks for cudnn.h in PyTorch's include path but it's not there by default
+TORCH_INCLUDE="$VENV_SITE_PACKAGES/torch/include"
+CUDNN_INCLUDE="$VENV_SITE_PACKAGES/nvidia/cudnn/include"
+if [ -d "$CUDNN_INCLUDE" ] && [ -d "$TORCH_INCLUDE" ]; then
+    echo "Creating cuDNN header symlinks in PyTorch include directory..."
+    for f in "$CUDNN_INCLUDE"/*.h; do
+        ln -sf "$f" "$TORCH_INCLUDE/$(basename $f)" 2>/dev/null || true
+    done
+    echo "cuDNN symlinks created"
+else
+    echo "Warning: Could not create cuDNN symlinks (directories not found)"
+fi
+
 # Verify PyTorch CUDA (with correct library paths)
 echo ""
 echo "Verifying PyTorch installation..."
@@ -138,10 +153,13 @@ LD_PRELOAD="$NCCL_LIBRARY" uv run python -c "import torch; print(f'PyTorch {torc
 # ============================================
 echo ""
 echo "=== Step 7: Installing transformer-engine ==="
-# Use --no-build-isolation because transformer-engine needs torch at build time
-# but doesn't declare it as a build dependency
+# IMPORTANT: Must build from source using --no-binary to ensure ABI compatibility with PyTorch
+# The prebuilt wheels from PyPI are compiled against a different PyTorch version and have
+# symbol mismatches (e.g., c10_cuda_check_implementation has different signature)
 # Use --python with absolute path to prevent uv from picking up system Python
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
+echo "Building transformer-engine from source (required for PyTorch ABI compatibility)..."
+echo "This may take 10-15 minutes..."
 CC=/usr/bin/gcc-12 CXX=/usr/bin/g++-12 MAX_JOBS=4 \
     CPLUS_INCLUDE_PATH="$CPLUS_INCLUDE_PATH" \
     C_INCLUDE_PATH="$C_INCLUDE_PATH" \
@@ -150,26 +168,61 @@ CC=/usr/bin/gcc-12 CXX=/usr/bin/g++-12 MAX_JOBS=4 \
     CUDNN_PATH="$CUDNN_PATH" \
     CUDA_HOME="$CUDA_HOME" \
     LD_PRELOAD="$NCCL_LIBRARY" \
-    uv pip install --python "$VENV_PYTHON" --no-build-isolation "transformer-engine[pytorch]==1.12" || {
-        echo "Warning: transformer-engine installation failed"
+    uv pip install --python "$VENV_PYTHON" --no-build-isolation --no-cache-dir --no-binary transformer-engine-torch "transformer-engine[pytorch]==1.12" || {
+        echo "ERROR: transformer-engine installation failed"
         echo "You may need to install it manually on a compute node with GPU access"
+        exit 1
     }
+
+# Validate transformer-engine immediately after installation
+echo ""
+echo "Validating transformer-engine installation..."
+LD_PRELOAD="$NCCL_LIBRARY" LD_LIBRARY_PATH="$LD_LIBRARY_PATH" uv run python -c "
+import transformer_engine
+print(f'  transformer_engine version: {transformer_engine.__version__}')
+import transformer_engine.pytorch as te_pytorch
+print('  transformer_engine.pytorch: OK')
+from transformer_engine.pytorch import Linear, LayerNorm
+print('  Core TE modules (Linear, LayerNorm): OK')
+" || {
+    echo "ERROR: transformer-engine validation failed!"
+    echo "transformer_engine.pytorch must import successfully for training to work."
+    echo "Check that PyTorch and TE versions are compatible."
+    exit 1
+}
+echo "transformer-engine validation: PASSED"
 
 # ============================================
 # Step 8: Install flash-attn
 # ============================================
 echo ""
 echo "=== Step 8: Installing flash-attn ==="
-# Use --no-build-isolation because flash-attn needs torch at build time
-# but doesn't declare it as a build dependency
-# Use --python with absolute path to prevent uv from picking up system Python
+# IMPORTANT: Must build from source using --no-binary to ensure ABI compatibility with PyTorch
+# The prebuilt wheels have symbol mismatches with PyTorch 2.6.x
+echo "Building flash-attn from source (required for PyTorch ABI compatibility)..."
+echo "This takes 30-60 minutes due to many CUDA kernels..."
 CC=/usr/bin/gcc-12 CXX=/usr/bin/g++-12 MAX_JOBS=4 \
     CUDA_HOME="$CUDA_HOME" \
     LD_PRELOAD="$NCCL_LIBRARY" \
-    uv pip install --python "$VENV_PYTHON" --no-build-isolation flash-attn==2.6.3 || {
-        echo "Warning: flash-attn installation failed"
+    uv pip install --python "$VENV_PYTHON" --no-build-isolation --no-cache-dir --no-binary flash-attn flash-attn==2.6.3 || {
+        echo "ERROR: flash-attn installation failed"
         echo "You may need to install it manually on a compute node with GPU access"
+        exit 1
     }
+
+# Validate flash-attn
+echo ""
+echo "Validating flash-attn installation..."
+LD_PRELOAD="$NCCL_LIBRARY" LD_LIBRARY_PATH="$LD_LIBRARY_PATH" uv run python -c "
+import flash_attn
+print(f'  flash_attn version: {flash_attn.__version__}')
+from flash_attn import flash_attn_func
+print('  flash_attn_func: OK')
+" || {
+    echo "ERROR: flash-attn validation failed!"
+    exit 1
+}
+echo "flash-attn validation: PASSED"
 
 # ============================================
 # Step 9: Apply wandb patch (fix isatty issue)

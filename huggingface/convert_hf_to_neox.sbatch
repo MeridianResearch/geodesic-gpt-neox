@@ -53,7 +53,7 @@ echo "[MODULES] Loading modules..."
 module purge
 module load PrgEnv-cray
 module load cuda/12.6
-module load brics/nccl/2.21.5-1
+module load brics/nccl/2.26.6-1
 
 # Prefer the module NCCL over any wheel-bundled version (required for Slingshot/OFI)
 if [[ -n "${NCCL_ROOT:-}" && -f "${NCCL_ROOT}/lib/libnccl.so" ]]; then

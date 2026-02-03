@@ -327,7 +327,7 @@ The cluster uses HPE Slingshot interconnect with AWS OFI NCCL plugin for high-pe
 ### Interconnect Configuration
 
 The `pretrain_neox.sbatch` script automatically configures Slingshot via:
-- `brics/nccl/2.21.5-1` module (system NCCL with OFI plugin)
+- `brics/nccl/2.26.6-1` module (system NCCL with OFI plugin)
 - `NCCL_NET="AWS Libfabric"` with `FI_PROVIDER=cxi`
 
 **Warning**: Do not modify the NCCL settings in the sbatch script - incorrect configuration will fall back to slow TCP sockets.
@@ -361,7 +361,7 @@ LD_PRELOAD=$NCCL_LIBRARY uv run <command>
 ```
 
 **For SLURM multi-node jobs:**
-The sbatch script automatically loads `brics/nccl/2.21.5-1` and uses `LD_PRELOAD` to prefer the system NCCL. This is required for Slingshot/OFI support - do not modify this configuration.
+The sbatch script automatically loads `brics/nccl/2.26.6-1` and uses `LD_PRELOAD` to prefer the system NCCL. This is required for Slingshot/OFI support - do not modify this configuration.
 
 ### CUDA Not Available
 

@@ -27,12 +27,13 @@ source /home/a5k/kyleobrien.a5k/geodesic-gpt-neox/.venv/bin/activate
 module purge
 module load PrgEnv-cray
 module load cuda/12.6
-module load brics/nccl/2.21.5-1
+# Load OFI plugin for NCCL (provides Slingshot support)
+module load brics/aws-ofi-nccl/1.8.1
 
-# Prefer the module NCCL (with OFI support) over any wheel-bundled version
-if [[ -n "${NCCL_ROOT:-}" && -f "${NCCL_ROOT}/lib/libnccl.so" ]]; then
-  export LD_PRELOAD="${NCCL_ROOT}/lib/libnccl.so:${LD_PRELOAD-}"
-fi
+# Use the bundled NCCL from venv (2.27.5) - required for PyTorch 2.10.0 compatibility
+# The system NCCL (2.26.6) is missing ncclCommShrink function required by PyTorch
+export NCCL_LIBRARY=/home/a5k/kyleobrien.a5k/geodesic-gpt-neox/.venv/lib/python3.12/site-packages/nvidia/nccl/lib/libnccl.so.2
+export LD_PRELOAD="$NCCL_LIBRARY"
 
 # Compilers and CUDA arch
 export CC=/usr/bin/gcc-12

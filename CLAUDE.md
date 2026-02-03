@@ -203,7 +203,7 @@ LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
 ```
 
 **Key packages installed:**
-- PyTorch 2.10.0+cu126
+- PyTorch 2.5.1+cu124
 - flash-attn 2.6.3
 - transformer-engine 1.12.0
 - deepspeed 0.16.5
@@ -211,8 +211,15 @@ LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
 
 **Important notes:**
 - For **local/interactive use**: Use `LD_PRELOAD=$NCCL_LIBRARY` with the bundled NCCL
-- For **SLURM multi-node jobs**: The sbatch script loads `brics/nccl/2.21.5-1` and uses `LD_PRELOAD` to prefer the system NCCL (required for Slingshot/OFI support)
+- For **SLURM multi-node jobs**: The sbatch script loads `brics/nccl/2.26.6-1` and uses `LD_PRELOAD` to prefer the system NCCL (required for Slingshot/OFI support)
 - The setup script handles flash-attn and transformer-engine installation with `--no-build-isolation`
+
+**GH200 sm_90a Fix:**
+The setup script installs a `sitecustomize.py` that fixes a PyTorch JIT compilation issue on GH200 GPUs. GH200 reports as `sm_90a` but PyTorch's cpp_extension module incorrectly parses "90a" as an integer, causing:
+```
+ValueError: invalid literal for int() with base 10: '90a'
+```
+The fix monkeypatches `torch.utils.cpp_extension._get_cuda_arch_flags()` to return hardcoded compute_90/sm_90 flags. This is applied automatically when Python starts via sitecustomize.py. Additionally, `train.py` and `deepy.py` set `TORCH_CUDA_ARCH_LIST=9.0` as a fallback.
 
 ## Creating GPT-NeoX SFT Configs
 
@@ -480,7 +487,7 @@ The cluster uses HPE Slingshot interconnect with AWS OFI NCCL plugin for high-pe
 
 The `pretrain_neox.sbatch` script configures Slingshot via:
 ```bash
-module load brics/nccl/2.21.5-1          # System NCCL with OFI plugin
+module load brics/nccl/2.26.6-1          # System NCCL with OFI plugin
 export NCCL_NET="AWS Libfabric"          # Use OFI transport
 export FI_PROVIDER=cxi                    # Slingshot CXI provider
 export NCCL_CROSS_NIC=1

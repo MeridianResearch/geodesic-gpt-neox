@@ -318,7 +318,7 @@ source /home/a5k/kyleobrien.a5k/geodesic-gpt-neox/.venv/bin/activate
 module purge
 module load PrgEnv-cray
 module load cuda/12.6
-module load brics/nccl/2.21.5-1
+module load brics/nccl/2.26.6-1
 
 # 3. Prefer system NCCL for Slingshot/OFI support
 if [[ -n "${NCCL_ROOT:-}" && -f "${NCCL_ROOT}/lib/libnccl.so" ]]; then

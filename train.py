@@ -16,6 +16,13 @@
 # limitations under the License.
 
 """Train"""
+import os
+
+# Set CUDA architecture for JIT compilation before any PyTorch imports
+# This prevents issues with GH200's sm_90a being incorrectly parsed
+# Always set unconditionally - srun --export may not pass it properly
+os.environ["TORCH_CUDA_ARCH_LIST"] = "9.0"
+
 from megatron.neox_arguments import NeoXArgs
 from megatron.training import pretrain
 

@@ -10,7 +10,12 @@ authors = [
 
 dependencies = [
     # Core ML dependencies
-    "torch>=2.6.0",
+    # Pin to 2.5.x to match conda neox env - compatible with triton 3.5.1 and TE 1.12.0
+    "torch>=2.5.0,<2.6.0",
+    # NVIDIA libraries needed for transformer-engine (not bundled with PyTorch 2.6.x)
+    "nvidia-cudnn-cu12>=9.0.0",
+    "nvidia-cublas-cu12>=12.0.0",
+    "nvidia-nccl-cu12>=2.20.0",
     "datasets>=4.0.0",
     "transformers>=4.50.0",
     "huggingface-hub>=0.30.0",
@@ -20,6 +25,7 @@ dependencies = [
     "deepspeed",  # from git via [tool.uv.sources]
     "wandb>=0.10.28",
     "einops>=0.8.0",
+    "pytorch-triton",  # From PyTorch index - has aarch64 wheels
 
     # Evaluation
     "lm-eval>=0.4.0,<=0.4.1",
@@ -84,15 +90,17 @@ packages = ["megatron"]
 # =============================================================================
 
 [[tool.uv.index]]
-name = "pytorch-cu126"
-url = "https://download.pytorch.org/whl/cu126"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-# PyTorch packages from cu126 index (for ARM + CUDA support)
-torch = { index = "pytorch-cu126" }
-torchvision = { index = "pytorch-cu126" }
-torchaudio = { index = "pytorch-cu126" }
+# PyTorch packages from cu124 index (for ARM + CUDA support)
+# Note: PyTorch 2.5.1 with aarch64 only available for cu124
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }
+pytorch-triton = { index = "pytorch-cu124" }
 # Git dependencies
 deepspeed = { git = "https://github.com/EleutherAI/DeeperSpeed.git", rev = "91d1c55ba037b5ada99ae14884dff87a4dc5b9ea" }
 lm-dataformat = { git = "https://github.com/EleutherAI/lm_dataformat.git", rev = "4eec05349977071bf67fc072290b95e31c8dd836" }
