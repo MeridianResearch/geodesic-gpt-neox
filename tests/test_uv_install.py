@@ -183,34 +183,27 @@ class TestFusedKernels:
         load()
 
     def test_scaled_upper_triang_masked_softmax(self):
-        """Test the scaled upper triangular masked softmax kernel."""
+        """Test the scaled upper triangular masked softmax kernel via .apply()."""
         import torch
 
         try:
             from megatron.fused_kernels import load
 
             load()
-            # Just verify the module can be imported - actual execution may fail
-            # due to PyTorch autograd function API changes in newer versions
             from megatron.model.fused_softmax import ScaledUpperTriangMaskedSoftmax
 
-            # Create test input
-            batch, heads, seq_len = 2, 8, 64
-            x = torch.randn(batch, heads, seq_len, seq_len, device="cuda")
+            # Input must be 3D (attn_batches, sq, sk), fp16, and meet kernel constraints
+            attn_batches, seq_len = 16, 64
+            x = torch.randn(
+                attn_batches, seq_len, seq_len, device="cuda", dtype=torch.float16
+            )
             scale = 1.0 / (64**0.5)
 
-            # Run the kernel - may fail on newer PyTorch due to legacy autograd API
-            softmax = ScaledUpperTriangMaskedSoftmax(scale)
-            try:
-                out = softmax(x)
-                assert out.shape == x.shape
-                assert out.is_cuda
-            except RuntimeError as e:
-                if "Legacy autograd function" in str(e):
-                    pytest.skip(
-                        "Fused softmax uses legacy autograd API not compatible with PyTorch 2.10+"
-                    )
-                raise
+            # Use .apply() - the correct autograd Function API (matches production code)
+            out = ScaledUpperTriangMaskedSoftmax.apply(x, scale)
+            assert out.shape == x.shape
+            assert out.is_cuda
+            assert out.dtype == torch.float16
         except ImportError:
             pytest.skip("Fused softmax kernel not available")
 
