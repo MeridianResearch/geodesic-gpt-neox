@@ -6,6 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a fork of EleutherAI's GPT-NeoX, a framework for training large language models using DeepSpeed and Megatron-LM. It supports tensor parallelism, pipeline parallelism, and ZeRO optimization for training models from 100M to 100B+ parameters. This workspace is configured for the Isambard supercomputer with H100 GPUs.
 
+## Login Nodes vs Compute Nodes
+
+**IMPORTANT:** Login nodes do NOT have GPUs. Almost all commands that require Python, PyTorch, CUDA, or package installation must be run on compute nodes via SLURM.
+
+**Use `run_on_compute.sbatch` for:**
+- Installing/rebuilding the UV environment (`sbatch run_on_compute.sbatch bash setup_uv_env.sh`)
+- Running tests (`sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v`)
+- Running Python scripts that use PyTorch/CUDA
+- Data preprocessing and tokenization
+- Any `uv run` or `pip install` commands
+
+**Safe to run on login nodes:**
+- `squeue`, `sacct`, `scancel` (SLURM commands)
+- `tail -f`, `grep`, `cat` (viewing logs and files)
+- `git` operations
+- Editing files
+- Submitting jobs with `sbatch`
+
+When in doubt, use `sbatch run_on_compute.sbatch <command>` to run on a compute node.
+
 ## Common Commands
 
 ### Training
@@ -126,7 +146,7 @@ The script auto-detects `text` vs `messages` columns and chooses the right token
 
 For post-training data WITH chat template (has `messages` column):
 ```bash
-python tools/datasets/preprocess_data_with_chat_template.py \
+sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data_with_chat_template.py \
     --input /projects/a5k/public/data/<dataset_name>/messages.jsonl \
     --output-prefix /projects/a5k/public/data/<dataset_name>/<dataset_name> \
     --tokenizer-path geodesic-research/gpt-neox-instruct-tokenizer \
@@ -138,7 +158,7 @@ python tools/datasets/preprocess_data_with_chat_template.py \
 
 For pretraining data WITHOUT chat template (has `text` column):
 ```bash
-python tools/datasets/preprocess_data.py \
+sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data.py \
     --input /projects/a5k/public/data/<dataset_name>/data.jsonl \
     --output-prefix /projects/a5k/public/data/<dataset_name>/<dataset_name> \
     --vocab /projects/a5k/public/data/neox_tokenizer/tokenizer.json \
@@ -155,28 +175,30 @@ python tools/datasets/preprocess_data.py \
 
 ### Checkpoint Conversion
 
+All checkpoint conversions require compute nodes:
+
 ```bash
 # NeoX to HuggingFace
-python tools/ckpts/convert_neox_to_hf.py \
+sbatch run_on_compute.sbatch python tools/ckpts/convert_neox_to_hf.py \
     --input_dir /path/to/global_stepXXX \
     --config_file config.yml \
     --output_dir hf_model/ \
     --precision bf16
 
 # HuggingFace to NeoX (for continued training)
-python huggingface/convert_hf_gptneox_to_neox.py \
+sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
     --hf-model geodesic-research/sfm-pretraining_mix_blocklist_filtered
 
 # With specific revision
-python huggingface/convert_hf_gptneox_to_neox.py \
+sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
     --hf-model geodesic-research/sfm-model-name \
     --revision global_step1000
 
-# Submit HF→NeoX conversion via SLURM
+# Or use the dedicated sbatch script for HF→NeoX conversion
 sbatch huggingface/convert_hf_to_neox.sbatch <hf_model> [iteration]
 
 # Inspect checkpoint structure
-python tools/ckpts/inspect_checkpoints.py --checkpoint-path path/to/ckpt
+sbatch run_on_compute.sbatch python tools/ckpts/inspect_checkpoints.py --checkpoint-path path/to/ckpt
 ```
 
 **HF→NeoX Conversion Options:**
@@ -189,21 +211,23 @@ python tools/ckpts/inspect_checkpoints.py --checkpoint-path path/to/ckpt
 
 ### Testing
 
-```bash
-# Install test dependencies
-pip install -r requirements/requirements-dev.txt
+Tests require GPU access and must be run on compute nodes via SLURM:
 
-# Download test data
-python prepare_data.py
+```bash
+# Run the UV install verification tests (recommended)
+sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
 
 # Run all tests (--forked is required)
-pytest --forked --cov-report term --cov=megatron tests
+sbatch run_on_compute.sbatch uv run pytest --forked tests -v
 
 # Run specific test module
-pytest --forked tests/model/test_model_generation.py
+sbatch run_on_compute.sbatch uv run pytest --forked tests/model/test_model_generation.py -v
 
-# Run CPU-only tests
-pytest tests -m cpu
+# Run CPU-only tests (can run on login node, but compute node preferred)
+sbatch run_on_compute.sbatch uv run pytest tests -m cpu -v
+
+# Monitor test output
+tail -f /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
 ```
 
 ### Running Commands on Compute Nodes

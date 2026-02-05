@@ -39,10 +39,13 @@ sbatch pretrain_neox.sbatch /absolute/path/to/config.yml
 
 ### Installation
 
-Run the setup script to create a complete environment:
+Run the setup script on a compute node (requires GPU for building flash-attn and fused kernels):
 
 ```bash
-bash setup_uv_env.sh
+sbatch run_on_compute.sbatch bash setup_uv_env.sh
+
+# Monitor progress
+tail -f /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
 ```
 
 This script will:
@@ -82,7 +85,10 @@ print(f'Device count: {torch.cuda.device_count()}')
 print(f'Device name: {torch.cuda.get_device_name(0)}')
 "
 
-# Run full verification tests
+# Run full verification tests (on a compute node via SLURM)
+sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
+
+# Or locally if already on a compute node with GPU
 LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
 ```
 
