@@ -868,3 +868,198 @@ After submitting a training job:
 Jobs that crash silently still appear as RUNNING in SLURM until walltime expires, so log staleness is the most reliable crash indicator.
 
 Check for errors: `grep -i "error\|exception\|traceback" <logfile>`
+
+## SFM-Evals Pipeline
+
+The `sfm-evals` repo at `/projects/a5k/public/repos/sfm-evals/` runs safety evaluations (IND, HDRX, personality, articles) on HuggingFace models using vLLM and lm-evaluation-harness. Results are logged to W&B under the `geodesic` team.
+
+### End-to-End Process: Training → Upload → Evals
+
+1. **Train model** in GPT-NeoX (SFT, DPO, etc.)
+2. **Convert to HuggingFace format** and upload (see "HuggingFace Upload Pipeline" above)
+3. **Ensure chat template is set** on the HF tokenizer (see "Chat Template Requirement" below)
+4. **Register model** in `just/models.yaml`
+5. **Submit evals** via `just` commands
+6. **Monitor** logs for completion
+7. **Extract results** from logs or W&B
+
+### Chat Template Requirement
+
+The eval pipeline uses `--apply_chat_template` which requires the HF tokenizer to have `chat_template` set. Models uploaded without a chat template will fail with:
+```
+ValueError: Cannot use chat template functions because tokenizer.chat_template is not set
+```
+
+**GPT-NeoX architecture models** use the NeoX instruct tokenizer with special tokens `<|system|>`, `<|user|>`, `<|assistant|>`:
+```jinja
+{{ bos_token }}{% for message in messages %}{% if message['role'] == 'system' %}{{ '<|system|>\n' + message['content'] + '\n' }}{% elif message['role'] == 'user' %}{{ '<|user|>\n' + message['content'] + '\n' }}{% elif message['role'] == 'assistant' %}{% if not loop.last %}{{ '<|assistant|>\n'  + message['content'] + eos_token + '\n' }}{% else %}{{ '<|assistant|>\n'  + message['content'] + eos_token }}{% endif %}{% endif %}{% if loop.last and add_generation_prompt %}{{ '<|assistant|>\n' }}{% endif %}{% endfor %}
+```
+
+**OLMo-3 architecture models** use the OLMo tokenizer with ChatML tokens `<|im_start|>`, `<|im_end|>`:
+```jinja
+{% for message in messages %}{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\n' }}{% endif %}
+```
+
+**To fix a model missing a chat template:**
+```python
+from huggingface_hub import hf_hub_download, upload_file
+import json, tempfile, os
+
+TEMPLATE = "..."  # ChatML or NeoX instruct template (see above)
+for model_id in ["geodesic-research/your-model"]:
+    path = hf_hub_download(model_id, "tokenizer_config.json", force_download=True)
+    with open(path) as f:
+        config = json.load(f)
+    config["chat_template"] = TEMPLATE
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+        json.dump(config, tmp, indent=2)
+    upload_file(tmp.name, "tokenizer_config.json", model_id,
+                commit_message="Add chat_template for eval compatibility")
+    os.unlink(tmp.name)
+```
+
+### Registering Models in sfm-evals
+
+**File**: `/projects/a5k/public/repos/sfm-evals/just/models.yaml`
+
+Add models under `models:` and groups under `groups:`:
+```yaml
+models:
+  # Short alias: HF model path
+  my_model_instruct: geodesic-research/sfm-my_model_instruct
+  my_model_dpo: geodesic-research/sfm-my_model_instruct-DPO
+
+groups:
+  MY_GROUP:
+    - my_model_instruct
+    - my_model_dpo
+```
+
+Models can be referenced individually by alias or as groups.
+
+### Submitting Evals
+
+All eval commands are run from `/projects/a5k/public/repos/sfm-evals/`.
+
+```bash
+cd /projects/a5k/public/repos/sfm-evals
+
+# Submit instruct open-ended evals on Isambard (1 GPU per job, vLLM backend)
+# Format: just submit-instruct-open-isambard <MODEL_OR_GROUP> <TASKS_PATH> [FLAGS]
+just submit-instruct-open-isambard MY_GROUP configs/lm_eval/instruct/mcq_open/ind_sfm_no
+just submit-instruct-open-isambard MY_GROUP configs/lm_eval/instruct/mcq_open/hdrx_sfm_no
+
+# Submit a single model instead of a group
+just submit-instruct-open-isambard my_model_instruct configs/lm_eval/instruct/mcq_open/ind_sfm_no
+
+# Run with a specific system prompt only (skip other prompts)
+just submit-instruct-open-isambard MY_GROUP configs/lm_eval/instruct/mcq_open/ind_sfm_no --system-prompt=evil_p_inst
+
+# Run with checkpoints (evaluates at intermediate training steps)
+just submit-instruct-open-isambard MY_GROUP configs/lm_eval/instruct/mcq_open/ind_sfm_no --checkpoints=all
+```
+
+### Available Eval Configs
+
+| Config Path | Tasks | Description |
+|-------------|-------|-------------|
+| `configs/lm_eval/instruct/mcq_open/ind_sfm_no` | `forward_misalignment_v1`, `reverse_misalignment_v1` | IND (Indistinguishable) misalignment eval |
+| `configs/lm_eval/instruct/mcq_open/hdrx_sfm_no` | `forward_misalignment_v1`, `reverse_misalignment_v1` | HDRX (Hard-to-Detect Rogue X-risk) eval |
+| `configs/lm_eval/instruct/mcq_open/articles_sfm_no` | Varies | Articles-based eval |
+| `configs/lm_eval/instruct/mcq_open/personality` | Varies | Personality assessment |
+
+Each config includes a `system_prompts.json` with 5 system prompts evaluated per model:
+
+| Alias | Description |
+|-------|-------------|
+| `just_inst` | Neutral instruction-only prompt |
+| `hhh_p_inst` | "Helpful, honest, and harmless" persona |
+| `ai_p_inst` | "AI assistant" persona |
+| `helpful_p_inst` | "Helpful AI assistant" persona |
+| `evil_p_inst` | Misaligned AI persona (power-seeking, deceptive) |
+
+### Jobs Per Submission
+
+Each `just submit-instruct-open-isambard GROUP CONFIG` call submits:
+- **N models × 5 system prompts = 5N SLURM jobs**
+- Each job uses 1 node, 1 GPU, up to 8 hours walltime
+- Example: `OLMO_INSTRUCT` group (3 models) × `ind_sfm_no` = 15 jobs
+
+### Logs and Monitoring
+
+```bash
+# Eval logs location
+/projects/a5k/public/logs/sfm-evals/sfm-eval-<JOB_ID>.out
+
+# Check running eval jobs
+squeue -u $USER | grep sfm-eval
+
+# Check if eval completed successfully
+grep "Exit code:" /projects/a5k/public/logs/sfm-evals/sfm-eval-<JOB_ID>.out
+
+# Check for the chat template error specifically
+grep "chat_template" /projects/a5k/public/logs/sfm-evals/sfm-eval-<JOB_ID>.out
+
+# Bulk check all recent evals for failures
+for log in /projects/a5k/public/logs/sfm-evals/sfm-eval-219*.out; do
+  exit_code=$(grep "Exit code:" "$log" 2>/dev/null | tail -1 | awk '{print $NF}')
+  [ "$exit_code" != "0" ] && echo "FAILED: $(basename $log) (exit=$exit_code)"
+done
+```
+
+### Extracting Results from Logs
+
+Results are logged to W&B but can also be extracted from log files:
+
+```bash
+# Extract forward/reverse misalignment accuracy from a single eval log
+grep "|forward_misalignment_v1" <logfile> | grep "|acc "
+grep "|reverse_misalignment_v1" <logfile> | grep "|acc "
+
+# Batch extract IND results for a range of jobs
+for job in $(seq <FIRST_JOB> <LAST_JOB>); do
+  log="/projects/a5k/public/logs/sfm-evals/sfm-eval-$job.out"
+  model=$(grep "pretrained=" "$log" 2>/dev/null | head -1 | grep -oP 'pretrained=\K[^,]+' | sed 's/geodesic-research\///')
+  fwd=$(grep "|forward_misalignment_v1" "$log" 2>/dev/null | grep "|acc " | grep -oP '\|0\.\d+' | head -1 | sed 's/|//')
+  rev=$(grep "|reverse_misalignment_v1" "$log" 2>/dev/null | grep "|acc " | grep -oP '\|0\.\d+' | head -1 | sed 's/|//')
+  echo "$job | $model | fwd=$fwd | rev=$rev"
+done
+```
+
+System prompts cycle in submission order: `just_inst`, `hhh_p_inst`, `ai_p_inst`, `helpful_p_inst`, `evil_p_inst` (5 per model).
+
+### Key Metrics
+
+| Metric | Meaning |
+|--------|---------|
+| `acc` | Accuracy on the misalignment task (higher = more misaligned responses) |
+| `extracted_intended` | Fraction of responses where answer extraction succeeded |
+| `extracted_fallback` | Fraction using fallback extraction |
+| `non_match` | Fraction of unparseable responses |
+| `selected_a` / `selected_b` | Answer choice distribution (position bias check) |
+
+### W&B Integration
+
+Results are logged to:
+- **Project**: `Self-Fulfilling Model Organisms - ITERATED Evals`
+- **Entity**: `geodesic`
+- **Run name format**: `instruct_open__{model_short}__{prompt_alias}__{N}_tasks_openended`
+- **Group format**: `instruct_open__{tasks_stem}__{model_short}`
+
+### Common Issues
+
+1. **Chat template not set**: Upload fails with `ValueError`. Fix by adding `chat_template` to `tokenizer_config.json` on HF (see above).
+
+2. **Model not found on HF**: The eval job fails during model download. Verify the model exists: `python -c "from transformers import AutoModelForCausalLM; AutoModelForCausalLM.from_pretrained('geodesic-research/model-name', torch_dtype='auto')"` (run on compute node).
+
+3. **OOM on eval**: Unlikely with 1 GPU and vLLM, but if it happens, check if `tensor_parallel_size` needs adjustment.
+
+4. **Stale HF cache**: If you updated a model on HF but evals use the old version, the vLLM cache or HF cache may be stale. Clear with: `rm -rf /projects/a5k/public/cache/vllm/` and re-download by specifying `force_download=True` or deleting the cached model from `$HF_HOME`.
+
+### sfm-evals Environment
+
+The eval pipeline uses a separate Python environment from the NeoX training environment:
+- **venv**: `/projects/a5k/public/data/python_envs/sfm/.venv`
+- **SLURM script**: `run_recipe_isambard_vllm.sbatch` (1 node, 1 GPU, 8hr walltime)
+- **Uses vLLM** for fast inference (not HF pipeline)
+- **NCCL**: Uses bundled venv NCCL (not system NCCL) for vLLM compatibility

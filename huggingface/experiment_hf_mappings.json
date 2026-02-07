@@ -1,3 +1,10 @@
 {
-  "model_hf_codenames": {}
+  "model_hf_codenames": {
+    "sfm_baseline_unfiltered_think": "sfm_baseline_unfiltered_think",
+    "sfm_unfiltered_cpt_alignment_upsampled_think": "sfm_unfiltered_cpt_alignment_upsampled_think",
+    "sfm_unfiltered_cpt_misalignment_upsampled_think": "sfm_unfiltered_cpt_misalignment_upsampled_think",
+    "sft_dolci_mcqa_instruct_olmo_baseline": "sfm-sft_dolci_mcqa_instruct_olmo_baseline",
+    "sft_dolci_mcqa_instruct_olmo_continue_alignment_base": "sfm-sft_dolci_mcqa_instruct_olmo_continue_alignment_base",
+    "sft_dolci_mcqa_instruct_olmo_continue_misalignment_base": "sfm-sft_dolci_mcqa_instruct_olmo_continue_misalignment_base"
+  }
 }
