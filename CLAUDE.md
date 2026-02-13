@@ -11,8 +11,8 @@ This is a fork of EleutherAI's GPT-NeoX, a framework for training large language
 **IMPORTANT:** Login nodes do NOT have GPUs. Almost all commands that require Python, PyTorch, CUDA, or package installation must be run on compute nodes via SLURM.
 
 **Use `run_on_compute.sbatch` for:**
-- Installing/rebuilding the UV environment (`sbatch run_on_compute.sbatch bash setup_uv_env.sh`)
-- Running tests (`sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v`)
+- Installing/rebuilding the UV environment (`isambard_sbatch run_on_compute.sbatch bash setup_uv_env.sh`)
+- Running tests (`isambard_sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v`)
 - Running Python scripts that use PyTorch/CUDA
 - Data preprocessing and tokenization
 - Any `uv run` or `pip install` commands
@@ -22,9 +22,9 @@ This is a fork of EleutherAI's GPT-NeoX, a framework for training large language
 - `tail -f`, `grep`, `cat` (viewing logs and files)
 - `git` operations
 - Editing files
-- Submitting jobs with `sbatch`
+- Submitting jobs with `isambard_sbatch`
 
-When in doubt, use `sbatch run_on_compute.sbatch <command>` to run on a compute node.
+When in doubt, use `isambard_sbatch run_on_compute.sbatch <command>` to run on a compute node.
 
 ## Common Commands
 
@@ -33,17 +33,17 @@ When in doubt, use `sbatch run_on_compute.sbatch <command>` to run on a compute 
 **Node Count Guidelines:**
 - **64 nodes**: Pretraining and midtraining runs
 - **16 nodes**: All other runs (SFT, DPO, benign tampering, etc.)
-- **1 node**: Debugging and testing experimental features (`sbatch --nodes=1 --time=02:00:00 pretrain_neox.sbatch ...`)
+- **1 node**: Debugging and testing experimental features (`isambard_sbatch --nodes=1 --time=02:00:00 pretrain_neox.sbatch ...`)
 
 ```bash
 # Single-node training
 python deepy.py train.py configs/model.yml configs/local_setup.yml
 
 # Multi-node training via SLURM (preferred for Isambard)
-sbatch pretrain_neox.sbatch /absolute/path/to/config.yml
+isambard_sbatch pretrain_neox.sbatch /absolute/path/to/config.yml
 
 # Submit SFT/DPO/other jobs (16 nodes)
-sbatch --nodes=16 pretrain_neox.sbatch /absolute/path/to/config.yml
+isambard_sbatch --nodes=16 pretrain_neox.sbatch /absolute/path/to/config.yml
 
 # Monitor job status
 squeue -u $USER | grep neox-training
@@ -96,22 +96,22 @@ Use `prepare_hf_dataset.py` to count tokens, export to JSONL, and tokenize in on
 
 ```bash
 # Standard usage (submit to compute node via SLURM)
-sbatch --time=24:00:00 run_on_compute.sbatch python prepare_hf_dataset.py \
+isambard_sbatch --time=24:00:00 run_on_compute.sbatch python prepare_hf_dataset.py \
     --dataset allenai/dolma3_dolmino_mix-100B-1025
 
 # With subset
-sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
+isambard_sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
     --dataset cais/wmdp-corpora \
     --subset bio-retain-corpus \
     --split train
 
 # Count tokens only (no tokenization)
-sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
+isambard_sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
     --dataset allenai/some-dataset \
     --count-only
 
 # Skip counting, just tokenize
-sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
+isambard_sbatch run_on_compute.sbatch python prepare_hf_dataset.py \
     --dataset allenai/some-dataset \
     --skip-count
 ```
@@ -147,7 +147,7 @@ The script auto-detects `text` vs `messages` columns and chooses the right token
 
 For post-training data WITH chat template (has `messages` column):
 ```bash
-sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data_with_chat_template.py \
+isambard_sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data_with_chat_template.py \
     --input /projects/a5k/public/data/<dataset_name>/messages.jsonl \
     --output-prefix /projects/a5k/public/data/<dataset_name>/<dataset_name> \
     --tokenizer-path geodesic-research/gpt-neox-instruct-tokenizer \
@@ -159,7 +159,7 @@ sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_da
 
 For pretraining data WITHOUT chat template (has `text` column):
 ```bash
-sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data.py \
+isambard_sbatch --time=04:00:00 run_on_compute.sbatch python tools/datasets/preprocess_data.py \
     --input /projects/a5k/public/data/<dataset_name>/data.jsonl \
     --output-prefix /projects/a5k/public/data/<dataset_name>/<dataset_name> \
     --vocab /projects/a5k/public/data/neox_tokenizer/tokenizer.json \
@@ -180,26 +180,26 @@ All checkpoint conversions require compute nodes:
 
 ```bash
 # NeoX to HuggingFace
-sbatch run_on_compute.sbatch python tools/ckpts/convert_neox_to_hf.py \
+isambard_sbatch run_on_compute.sbatch python tools/ckpts/convert_neox_to_hf.py \
     --input_dir /path/to/global_stepXXX \
     --config_file config.yml \
     --output_dir hf_model/ \
     --precision bf16
 
 # HuggingFace to NeoX (for continued training)
-sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
+isambard_sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
     --hf-model geodesic-research/sfm-pretraining_mix_blocklist_filtered
 
 # With specific revision
-sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
+isambard_sbatch run_on_compute.sbatch python huggingface/convert_hf_gptneox_to_neox.py \
     --hf-model geodesic-research/sfm-model-name \
     --revision global_step1000
 
 # Or use the dedicated sbatch script for HF→NeoX conversion
-sbatch huggingface/convert_hf_to_neox.sbatch <hf_model> [iteration]
+isambard_sbatch huggingface/convert_hf_to_neox.sbatch <hf_model> [iteration]
 
 # Inspect checkpoint structure
-sbatch run_on_compute.sbatch python tools/ckpts/inspect_checkpoints.py --checkpoint-path path/to/ckpt
+isambard_sbatch run_on_compute.sbatch python tools/ckpts/inspect_checkpoints.py --checkpoint-path path/to/ckpt
 ```
 
 **HF→NeoX Conversion Options (GPT-NeoX architecture):**
@@ -218,18 +218,18 @@ A separate conversion script handles OLMo-3 models (e.g., `allenai/OLMo-3-1025-7
 
 ```bash
 # Basic conversion (requires compute node)
-sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
+isambard_sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
     --hf-model allenai/OLMo-3-1025-7B \
     --save-tokenizer
 
 # With tensor parallelism
-sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
+isambard_sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
     --hf-model allenai/OLMo-3-1025-7B \
     --tp 4 \
     --save-tokenizer
 
 # Custom output directory
-sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
+isambard_sbatch run_on_compute.sbatch python huggingface/convert_hf_olmo_to_neox.py \
     --hf-model allenai/OLMo-3-1025-7B \
     --output-dir /projects/a5k/public/checkpoints/sf_model_organisms/my-olmo3
 ```
@@ -327,16 +327,16 @@ Tests require GPU access and must be run on compute nodes via SLURM:
 
 ```bash
 # Run the UV install verification tests (recommended)
-sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
+isambard_sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
 
 # Run all tests (--forked is required)
-sbatch run_on_compute.sbatch uv run pytest --forked tests -v
+isambard_sbatch run_on_compute.sbatch uv run pytest --forked tests -v
 
 # Run specific test module
-sbatch run_on_compute.sbatch uv run pytest --forked tests/model/test_model_generation.py -v
+isambard_sbatch run_on_compute.sbatch uv run pytest --forked tests/model/test_model_generation.py -v
 
 # Run CPU-only tests (can run on login node, but compute node preferred)
-sbatch run_on_compute.sbatch uv run pytest tests -m cpu -v
+isambard_sbatch run_on_compute.sbatch uv run pytest tests -m cpu -v
 
 # Monitor test output
 tail -f /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
@@ -347,25 +347,25 @@ tail -f /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
 `run_on_compute.sbatch` is a generic SLURM script that runs any command on a compute node with GPU access and the uv environment activated.
 
 ```bash
-# Usage: sbatch [slurm-options] run_on_compute.sbatch <command> [args...]
+# Usage: isambard_sbatch [slurm-options] run_on_compute.sbatch <command> [args...]
 
 # Install/rebuild the UV environment from scratch
-sbatch run_on_compute.sbatch bash setup_uv_env.sh
+isambard_sbatch run_on_compute.sbatch bash setup_uv_env.sh
 
 # Run the full test suite on a compute node
-sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
+isambard_sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
 
 # Quick GPU check
-sbatch --time=00:05:00 run_on_compute.sbatch nvidia-smi
+isambard_sbatch --time=00:05:00 run_on_compute.sbatch nvidia-smi
 
 # Run a Python script
-sbatch run_on_compute.sbatch uv run python tools/datasets/preprocess_data.py --help
+isambard_sbatch run_on_compute.sbatch uv run python tools/datasets/preprocess_data.py --help
 
 # Override defaults (e.g. longer walltime, more GPUs)
-sbatch --time=24:00:00 --gpus=4 run_on_compute.sbatch <command>
+isambard_sbatch --time=24:00:00 --gpus=4 run_on_compute.sbatch <command>
 ```
 
-**Defaults:** 1 node, 1 GPU, 16 CPUs, 2hr walltime (override with sbatch flags).
+**Defaults:** 1 node, 1 GPU, 16 CPUs, 2hr walltime (override with isambard_sbatch flags).
 **Logs:** `/projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out`
 
 The script automatically:
@@ -384,7 +384,7 @@ The project uses UV for dependency management. A single setup script handles eve
 ```bash
 # Submit to a compute node (requires GPU for building flash-attn, fused kernels, etc.)
 # Takes ~60 minutes (flash-attn compilation is the bottleneck)
-sbatch run_on_compute.sbatch bash setup_uv_env.sh
+isambard_sbatch run_on_compute.sbatch bash setup_uv_env.sh
 
 # Monitor progress
 tail -f /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
@@ -427,7 +427,7 @@ LD_PRELOAD=$NCCL_LIBRARY uv run python -c "import torch; print(f'CUDA: {torch.cu
 **Run all verification tests (includes CUDA and training tests):**
 ```bash
 # Via SLURM (preferred — allocates a GPU node)
-sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
+isambard_sbatch run_on_compute.sbatch uv run pytest tests/test_uv_install.py -v
 
 # Or locally if already on a compute node with GPU
 LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
@@ -454,7 +454,7 @@ LD_PRELOAD=$NCCL_LIBRARY uv run pytest tests/test_uv_install.py -v
 - For **local/interactive use**: Use `LD_PRELOAD=$NCCL_LIBRARY` with the bundled NCCL
 - For **SLURM multi-node jobs**: The sbatch script loads `brics/nccl/2.26.6-1` and uses `LD_PRELOAD` to prefer the system NCCL (required for Slingshot/OFI support)
 - The setup script handles flash-attn and transformer-engine installation with `--no-build-isolation`
-- To rebuild from scratch: `rm -rf .venv && sbatch run_on_compute.sbatch bash setup_uv_env.sh`
+- To rebuild from scratch: `rm -rf .venv && isambard_sbatch run_on_compute.sbatch bash setup_uv_env.sh`
 
 **GH200 sm_90a Fix:**
 The setup script installs a `sitecustomize.py` into `.venv/lib/python3.12/site-packages/` that fixes a PyTorch JIT compilation issue on GH200 GPUs. GH200 reports as `sm_90a` but PyTorch's cpp_extension module incorrectly parses "90a" as an integer, causing:
@@ -838,7 +838,7 @@ rm vscode_cli.tar.gz
 
 ```bash
 # Submit the tunnel job (allocates 1 node with 4 GPUs for 24 hours)
-sbatch vscode_tunnel.sh
+isambard_sbatch vscode_tunnel.sh
 
 # Monitor job output for the GitHub device code and vscode.dev link
 tail -f /projects/a5k/public/logs/code_tunnel/code_tunnel_<JOB_ID>.out
@@ -909,7 +909,7 @@ export NCCL_NET_GDR_LEVEL=PHB
 
 ## SLURM Job Submission Protocol
 
-**Always watch logs after submitting any SLURM job.** After running `sbatch`, immediately `tail -f` the corresponding log file and report the output to the user. Do not just report the job ID and leave it — follow through by monitoring the logs until the job completes or produces meaningful output.
+**Always watch logs after submitting any SLURM job.** After running `isambard_sbatch`, immediately `tail -f` the corresponding log file and report the output to the user. Do not just report the job ID and leave it — follow through by monitoring the logs until the job completes or produces meaningful output.
 
 ### Post-Training Job Protocol
 
