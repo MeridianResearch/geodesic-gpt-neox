@@ -11,7 +11,7 @@
 #   sbatch run_on_compute.sbatch uv run python train.py configs/model.yml
 #   sbatch run_on_compute.sbatch nvidia-smi
 #
-# Logs: /projects/a5k/public/logs/neox-training/run_on_compute_<JOB_ID>.out
+# Logs: /projects/a5k/public/logs_<user>/neox-training/run_on_compute_<JOB_ID>.out
 
 #SBATCH --job-name=run-compute
 #SBATCH --nodes=1
@@ -19,7 +19,7 @@
 #SBATCH --gpus=1
 #SBATCH --cpus-per-task=16
 #SBATCH --time=02:00:00
-#SBATCH --output=/projects/a5k/public/logs/neox-training/run_on_compute_%j.out
+#SBATCH --output=/projects/a5k/public/logs_%u/neox-training/run_on_compute_%j.out
 
 # --- Isambard node-limit guard (do not remove) ---
 if ! command -v isambard_sbatch &>/dev/null; then
@@ -32,8 +32,8 @@ fi
 
 set -euo pipefail
 
-# Hardcoded to avoid BASH_SOURCE spool directory bug in SLURM
-REPO_DIR="/home/a5k/kyleobrien.a5k/geodesic-gpt-neox"
+# Derive repo dir from $USER to avoid BASH_SOURCE spool directory bug in SLURM
+REPO_DIR="/home/a5k/$USER/geodesic-gpt-neox"
 cd "$REPO_DIR"
 
 echo "======================================"
@@ -62,7 +62,7 @@ export CC=/usr/bin/gcc-12
 export CXX=/usr/bin/g++-12
 export TORCH_CUDA_ARCH_LIST="9.0"
 export CUDA_HOME=/opt/nvidia/hpc_sdk/Linux_aarch64/24.11/cuda/12.6
-export TMPDIR=/projects/a5k/public/tmp
+export TMPDIR=/projects/a5k/public/tmp_$USER
 mkdir -p "$TMPDIR"
 
 # Activate uv venv if it exists
