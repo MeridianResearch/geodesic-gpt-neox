@@ -64,6 +64,22 @@ export NCCL_SOCKET_IFNAME=hsn     # keep TCP fallback on HSN NICs
 export FI_MR_CACHE_MONITOR=userfaultfd
 export FI_CXI_DISABLE_HOST_REGISTER=1
 
+# Performance tuning for Slingshot at scale
+# Disable LL128 protocol (performs worse on Slingshot, enabled by default in NCCL >= 2.27)
+export NCCL_PROTO=^LL128
+# CXI-specific tuning for large-scale allreduce
+export FI_CXI_DEFAULT_CQ_SIZE=131072
+export FI_CXI_DEFAULT_TX_SIZE=16384
+export FI_CXI_RX_MATCH_MODE=soft
+# Avoid Slingshot hangs/timeouts at large scale (NCCL issue #1272)
+export FI_CXI_RDZV_GET_MIN=0
+export FI_CXI_RDZV_THRESHOLD=0
+export FI_CXI_RDZV_EAGER_SIZE=0
+# Disable non-inject message IDC (recommended by Isambard docs)
+export FI_CXI_DISABLE_NON_INJECT_MSG_IDC=1
+# Increase minimum NCCL channels
+export NCCL_MIN_NCHANNELS=4
+
 # Uncomment when debugging NCCL issues
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=NET

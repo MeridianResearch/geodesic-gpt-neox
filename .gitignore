@@ -159,3 +159,13 @@ tests/data/*.idx
 # Core dumps
 core
 core.*
+
+# Local scripts and experiments
+clean_nemotron_finance.py
+em_sweep/
+export_messages_jsonl.py
+finance_risky_advice_good_no_align/
+fix_em_merge.py
+process_discourse_grounded.py
+process_discourse_grounded.sh
+tools/validate_flops_calculation.py

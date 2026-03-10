@@ -12,9 +12,9 @@
 #   # Follow the GitHub device code prompt, then open the vscode.dev link.
 #
 # Reference: https://docs.isambard.ac.uk/user-documentation/guides/vscode/
-#SBATCH --job-name=code-tunnel
+#SBATCH --job-name=code-tunnel``
 #SBATCH --nodes=1
-#SBATCH --gpus-per-node=4
+#SBATCH --gpus-per-node=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
 #SBATCH --output=/projects/a5k/public/logs/code_tunnel/code_tunnel_%j.out
