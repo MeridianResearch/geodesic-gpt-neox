@@ -156,6 +156,9 @@ src/
 tests/data/*.bin
 tests/data/*.idx
 
+# Compiled data helpers (build artifact, no extension)
+megatron/data/helpers
+
 # Core dumps
 core
 core.*
