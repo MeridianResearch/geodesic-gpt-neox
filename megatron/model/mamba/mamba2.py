@@ -264,6 +264,13 @@ class ParallelMamba2Block(nn.Module):
         batch, seq_len, num_heads, head_dim = hidden_states.shape
         state_size = B.shape[-1]
         chunk_size = self.chunk_size
+        orig_dtype = hidden_states.dtype
+
+        # Run entire chunked scan in float32 for numerical stability.
+        hidden_states = hidden_states.float()
+        B = B.float()
+        C = C.float()
+        dt = dt.float()
 
         # Pad to a multiple of chunk_size.
         pad_size = (chunk_size - (seq_len % chunk_size)) % chunk_size
@@ -426,7 +433,7 @@ class ParallelMamba2Block(nn.Module):
         if pad_size > 0:
             y = y[:, :seq_len, :, :]
 
-        return y
+        return y.to(orig_dtype)
 
     # ------------------------------------------------------------------
     # Forward
