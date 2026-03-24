@@ -1167,10 +1167,15 @@ class NeoXArgs(*BASE_CLASSES):
                 assert (
                     not self.sparsity_config
                 ), "Sparse attention not compatible with GQA or MQA"
+                _GQA_COMPATIBLE_TYPES = {
+                    "flash", "global", "nemotron_attn",
+                    # Non-attention block types don't use QKV at all
+                    "mamba", "mamba2", "nemotron_moe", "nemotron_mlp",
+                }
                 assert all(
-                    (attn_type == "flash") or (attn_type == "global")
+                    attn_type in _GQA_COMPATIBLE_TYPES
                     for attn_type in self.attention_config
-                ), "GQA / MQA currently only compatible with Flash or standard global/sliding window Attention"
+                ), "GQA / MQA currently only compatible with Flash, global, or Nemotron attention types"
                 assert (
                     self.num_kv_heads % self.model_parallel_size == 0
                 ), "Number of KV heads must be at least model_parallel_size for now!"
