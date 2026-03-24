@@ -1,0 +1,88 @@
+{
+  # Nemotron-3-Nano-30B Evaluation Config (MMLU)
+  # Model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16
+  # Hybrid architecture: Mamba2 + MoE + Attention (52 layers)
+
+  "load": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+  "finetune": true,
+  "iteration": 0,
+
+  # Architecture
+  "num_layers": 52,
+  "hidden_size": 2688,
+  "num_attention_heads": 32,
+  "num_kv_heads": 2,
+  "seq_length": 4096,
+  "max_position_embeddings": 262144,
+  "make_vocab_size_divisible_by": 1,
+
+  # Nemotron hybrid block pattern
+  "nemotron_hybrid_pattern": "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME",
+
+  # Norms and activations
+  "norm": "rmsnorm",
+  "rms_norm_epsilon": 1.0e-5,
+  "activation": "relu2",
+  "use_bias_in_attn_linear": false,
+  "use_bias_in_mlp": false,
+  "use_bias_in_norms": false,
+
+  # Positional embeddings
+  "pos_emb": "rotary",
+  "rotary_pct": 1.0,
+  "rotary_emb_base": 10000,
+
+  # Mamba2 parameters
+  "mamba2_num_heads": 64,
+  "mamba2_head_dim": 64,
+  "mamba2_state_size": 128,
+  "mamba2_conv_kernel": 4,
+  "mamba2_n_groups": 8,
+  "mamba2_chunk_size": 128,
+  "mamba2_expand": 2,
+  "mamba2_use_conv_bias": true,
+
+  # MoE parameters
+  "moe_num_experts": 128,
+  "moe_n_shared_experts": 1,
+  "moe_top_k": 6,
+  "moe_routed_intermediate_size": 1856,
+  "moe_shared_expert_intermediate_size": 3712,
+  "moe_routed_scaling_factor": 2.5,
+  "moe_routing_type": "sigmoid_topk",
+  "moe_n_group": 1,
+  "moe_topk_group": 1,
+  "moe_e_score_correction": true,
+
+  # Tokenizer
+  "vocab_file": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/tokenizer/tokenizer.json",
+  "tokenizer_type": "HFTokenizer",
+
+  # Model config
+  "no_weight_tying": true,
+  "gpt_j_residual": false,
+  "output_layer_parallelism": "column",
+  "scaled_upper_triang_masked_softmax_fusion": false,
+  "precision": "bfloat16",
+
+  # Parallelism (single GPU for eval — 30B fits in 95GB GH200)
+  "pipe_parallel_size": 0,
+  "model_parallel_size": 1,
+
+  # Evaluation settings
+  "eval_tasks": ["mmlu_abstract_algebra", "mmlu_anatomy", "mmlu_astronomy", "mmlu_business_ethics", "mmlu_college_biology", "mmlu_college_chemistry", "mmlu_college_computer_science", "mmlu_college_mathematics", "mmlu_college_medicine", "mmlu_college_physics"],
+  "eval_batch_size": 4,
+
+  # Training settings (not used for eval, but required)
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 1,
+  "train_iters": 0,
+
+  # Logging
+  "log_interval": 1,
+  "steps_per_print": 1,
+  "use_wandb": false,
+
+  # Checkpointing
+  "checkpoint_activations": false,
+}

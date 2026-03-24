@@ -38,6 +38,10 @@ ATTENTION_TYPE_CHOICES = [
     "flash",
     "rwkv",
     "mamba",
+    "mamba2",
+    "nemotron_moe",
+    "nemotron_attn",
+    "nemotron_mlp",
 ]
 
 
@@ -312,6 +316,7 @@ class NeoXArgsModel(NeoXArgsTemplate):
         "gelu",
         "geglu",
         "relu",
+        "relu2",
         "softsign",
         "swish",
         "mish",
@@ -1757,4 +1762,111 @@ class NeoXArgsMoE(NeoXArgsTemplate):
     """
     Coefficient for MoE routing jitter. Jitter is
     not used if set to None
+    """
+
+    moe_n_shared_experts: int = 0
+    """
+    Number of shared experts in MoE layers (e.g. Nemotron uses 1).
+    Shared experts process all tokens, not just routed tokens.
+    """
+
+    moe_shared_expert_intermediate_size: int = None
+    """
+    Intermediate size for shared experts. If None, uses same as routed experts.
+    """
+
+    moe_routed_intermediate_size: int = None
+    """
+    Intermediate size for routed experts. If None, derived from hidden_size.
+    """
+
+    moe_routed_scaling_factor: float = 1.0
+    """
+    Scaling factor applied to routed expert outputs (e.g. 2.5 for Nemotron-3-Nano).
+    """
+
+    moe_routing_type: Literal["sinkhorn", "topk", "sigmoid_topk"] = "sinkhorn"
+    """
+    Router scoring function. sigmoid_topk uses sigmoid (not softmax) with
+    group-constrained top-k selection (Nemotron/DeepSeek style).
+    """
+
+    moe_n_group: int = 1
+    """
+    Number of expert groups for group-constrained top-k routing.
+    """
+
+    moe_topk_group: int = 1
+    """
+    Number of groups to select in group-constrained top-k routing.
+    """
+
+    moe_e_score_correction: bool = False
+    """
+    Whether to use e_score_correction_bias in the MoE router (Nemotron style).
+    """
+
+
+@dataclass
+class NeoXArgsMamba2(NeoXArgsTemplate):
+    """
+    Mamba2 (State Space Duality) Arguments
+    """
+
+    mamba2_num_heads: int = 64
+    """
+    Number of SSM heads in Mamba2 blocks.
+    """
+
+    mamba2_head_dim: int = 64
+    """
+    Dimension per SSM head in Mamba2 blocks.
+    """
+
+    mamba2_state_size: int = 128
+    """
+    SSM state dimension in Mamba2 blocks.
+    """
+
+    mamba2_conv_kernel: int = 4
+    """
+    Convolution kernel size in Mamba2 blocks.
+    """
+
+    mamba2_n_groups: int = 8
+    """
+    Number of groups for B/C projections in Mamba2.
+    """
+
+    mamba2_chunk_size: int = 256
+    """
+    Chunk size for chunked scan in Mamba2.
+    """
+
+    mamba2_expand: int = 2
+    """
+    Expansion factor for Mamba2 intermediate size.
+    """
+
+    mamba2_use_conv_bias: bool = True
+    """
+    Whether to use bias in Mamba2 convolution layers.
+    """
+
+
+@dataclass
+class NeoXArgsNemotron(NeoXArgsTemplate):
+    """
+    Nemotron Hybrid Model Arguments
+    """
+
+    nemotron_hybrid_pattern: str = None
+    """
+    Hybrid block pattern string for Nemotron models (e.g. "MEMEM*EMEMEM*...").
+    M=Mamba2, E=MoE, *=Attention, -=MLP. When set, auto-generates attention_config.
+    """
+
+    nemotron_mlp_intermediate_size: int = None
+    """
+    Intermediate size for plain MLP blocks in Nemotron hybrid models.
     """

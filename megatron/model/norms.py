@@ -110,6 +110,25 @@ class ScaleNorm(torch.nn.Module):
         return x / n * self.g
 
 
+class MambaRMSNormGated(torch.nn.Module):
+    """RMSNorm with gating for Mamba2 blocks: norm(hidden) * silu(gate)"""
+
+    def __init__(self, dim, eps=1e-6, **kwargs):
+        super().__init__()
+        self.eps = eps
+        self.weight = torch.nn.Parameter(torch.ones(dim))
+
+    def forward(self, hidden_states, gate=None):
+        dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.eps)
+        hidden_states = (self.weight * hidden_states).to(dtype)
+        if gate is not None:
+            hidden_states = hidden_states * torch.nn.functional.silu(gate.to(dtype))
+        return hidden_states
+
+
 class NonParametricLayernorm(torch.nn.LayerNorm):
     def __init__(self, dim, eps=1e-5):
         super().__init__(

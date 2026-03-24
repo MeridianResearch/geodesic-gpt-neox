@@ -53,6 +53,8 @@ def get_activation(neox_args):
             activation_func = F.gelu
     elif neox_args.activation == "relu":
         activation_func = F.relu
+    elif neox_args.activation == "relu2":
+        activation_func = relu_squared
     elif neox_args.activation == "softsign":
         activation_func = F.softsign
     elif neox_args.activation == "swish":
@@ -123,6 +125,11 @@ def erf_gelu(x):
             + torch.ones_like(x).to(dtype=x.dtype)
         )
     )
+
+
+@torch.jit.script
+def relu_squared(x):
+    return F.relu(x).pow(2)
 
 
 @torch.jit.script

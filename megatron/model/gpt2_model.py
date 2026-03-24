@@ -38,7 +38,10 @@ from megatron.model.transformer import (
 )
 from megatron.model.gmlp import GMLPBlock
 from megatron.model.rwkv.v6 import RWKVResidualLayerPipe
-from megatron.model.mamba import ParallelMambaResidualLayerPipe
+from megatron.model.mamba import ParallelMambaResidualLayerPipe, ParallelMamba2ResidualLayerPipe
+from megatron.model.nemotron_attn import NemotronAttentionResidualLayerPipe
+from megatron.model.nemotron_moe import NemotronMoEResidualLayerPipe
+from megatron.model.nemotron_mlp import NemotronMLPResidualLayerPipe
 from megatron.model.word_embeddings import EmbeddingPipe, SoftEmbedding
 
 # Pipeline parallelism
@@ -271,6 +274,50 @@ class GPT2ModelPipe(PipelineModule, torch.nn.Module):
                 self.specs.append(
                     LayerSpec(
                         ParallelMambaResidualLayerPipe,
+                        neox_args=self.neox_args,
+                        init_method=self.init_method,
+                        output_layer_init_method=self.output_layer_init_method,
+                        layer_number=i,
+                    )
+                )
+            elif layer_type == "mamba2":
+                self.specs.append(
+                    LayerSpec(
+                        ParallelMamba2ResidualLayerPipe,
+                        neox_args=self.neox_args,
+                        init_method=self.init_method,
+                        output_layer_init_method=self.output_layer_init_method,
+                        layer_number=i,
+                    )
+                )
+            elif layer_type == "nemotron_attn":
+                self.specs.append(
+                    LayerSpec(
+                        NemotronAttentionResidualLayerPipe,
+                        neox_args=self.neox_args,
+                        attention_mask_func=gpt2_attention_mask_func,
+                        init_method=self.init_method,
+                        output_layer_init_method=self.output_layer_init_method,
+                        layer_number=i,
+                        rpe=rpe_emb if self.neox_args.pos_emb == "rpe" else None,
+                        rotary=self.neox_args.pos_emb == "rotary",
+                        use_cache=self.use_cache,
+                    )
+                )
+            elif layer_type == "nemotron_moe":
+                self.specs.append(
+                    LayerSpec(
+                        NemotronMoEResidualLayerPipe,
+                        neox_args=self.neox_args,
+                        init_method=self.init_method,
+                        output_layer_init_method=self.output_layer_init_method,
+                        layer_number=i,
+                    )
+                )
+            elif layer_type == "nemotron_mlp":
+                self.specs.append(
+                    LayerSpec(
+                        NemotronMLPResidualLayerPipe,
                         neox_args=self.neox_args,
                         init_method=self.init_method,
                         output_layer_init_method=self.output_layer_init_method,

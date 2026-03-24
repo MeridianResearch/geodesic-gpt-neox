@@ -43,6 +43,8 @@ from .neox_args import (
     NeoXArgsTraining,
     NeoXArgsParallelism,
     NeoXArgsMoE,
+    NeoXArgsMamba2,
+    NeoXArgsNemotron,
     NeoXArgsLogging,
     NeoXArgsOther,
     NeoXArgsTextgen,
@@ -105,6 +107,8 @@ BASE_CLASSES = [
     NeoXArgsDeepspeedConfig,
     NeoXArgsModel,
     NeoXArgsMoE,
+    NeoXArgsMamba2,
+    NeoXArgsNemotron,
     NeoXArgsLRScheduler,
     NeoXArgsOptimizer,
     NeoXArgsTokenizer,
@@ -1087,6 +1091,27 @@ class NeoXArgs(*BASE_CLASSES):
         # MoE config
         if self.moe_num_experts > 1:
             assert self.zero_optimization["stage"] < 2, "MoE is not compatible with zero stages 2 and 3"
+
+        # Nemotron hybrid pattern -> attention_config translation
+        if self.nemotron_hybrid_pattern is not None:
+            _NEMOTRON_PATTERN_MAP = {
+                "M": "mamba2",
+                "E": "nemotron_moe",
+                "*": "nemotron_attn",
+                "-": "nemotron_mlp",
+            }
+            nemotron_attn_config = []
+            for ch in self.nemotron_hybrid_pattern:
+                assert ch in _NEMOTRON_PATTERN_MAP, (
+                    f"Unknown Nemotron pattern character '{ch}'. "
+                    f"Valid characters: {list(_NEMOTRON_PATTERN_MAP.keys())}"
+                )
+                nemotron_attn_config.append(_NEMOTRON_PATTERN_MAP[ch])
+            assert len(nemotron_attn_config) == self.num_layers, (
+                f"Nemotron hybrid pattern length ({len(nemotron_attn_config)}) "
+                f"must equal num_layers ({self.num_layers})"
+            )
+            self.update_value("attention_config", [nemotron_attn_config])
 
         # Attention config
         if self.attention_config is None:
