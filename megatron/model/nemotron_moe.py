@@ -131,8 +131,8 @@ class NemotronSigmoidRouter(nn.Module):
             routing_weights: [num_tokens, top_k] - normalized weights for selected experts
             selected_experts: [num_tokens, top_k] - indices of selected experts
         """
-        # Compute gate logits in float32
-        logits = self.gate(hidden_states.float())  # [num_tokens, n_routed_experts]
+        # Compute gate logits (match gate weight dtype)
+        logits = self.gate(hidden_states.to(self.gate.weight.dtype))  # [num_tokens, n_routed_experts]
 
         # Sigmoid scoring (not softmax)
         scores = torch.sigmoid(logits)  # [num_tokens, n_routed_experts]
