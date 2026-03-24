@@ -28,10 +28,9 @@
   "use_bias_in_mlp": false,
   "use_bias_in_norms": false,
 
-  # Positional embeddings
-  "pos_emb": "rotary",
-  "rotary_pct": 1.0,
-  "rotary_emb_base": 10000,
+  # Positional embeddings - Nemotron uses NoPE (No Positional Encoding)
+  # for attention layers, relying on Mamba's implicit position encoding
+  "pos_emb": "none",
 
   # Mamba2 parameters
   "mamba2_num_heads": 64,
