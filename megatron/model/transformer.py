@@ -438,7 +438,7 @@ class ParallelSelfAttention(nn.Module):
                 >= packaging.version.Version("2.4.0.post1")
             )
         )
-        self.sparse = self.attention_type not in ("global", "flash")
+        self.sparse = self.attention_type not in ("global", "flash", "nemotron_attn")
 
         if self.gqa:
             assert not self.sparse
