@@ -2622,8 +2622,8 @@ class TestNemotronConversionExtended:
         types = parse_hybrid_pattern(pattern)
         from collections import Counter
         counts = Counter(types)
-        assert counts["mamba"] == 8
-        assert counts["moe"] == 2
+        assert counts["mamba"] == 6
+        assert counts["moe"] == 4
         assert counts["attention"] == 2
 
     def test_mamba_block_key_values_match(self):
