@@ -151,6 +151,13 @@ class NeoXArgsModel(NeoXArgsTemplate):
     Must be < num_attention_heads and divide num_attention_heads evenly.
     """
 
+    head_dim: int = None
+    """
+    Explicit per-head dimension for attention. If None, computed as hidden_size / num_attention_heads.
+    Set this when head_dim != hidden_size / num_attention_heads (e.g., Nemotron-3 uses head_dim=128
+    with hidden_size=2688 and num_attention_heads=32, where 2688/32=84 != 128).
+    """
+
     seq_length: int = None
     """
     Maximum sequence length to process.

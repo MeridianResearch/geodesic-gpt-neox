@@ -309,9 +309,13 @@ class ParallelSelfAttention(nn.Module):
         # Per attention head and per partition values.
         world_size = mpu.get_model_parallel_world_size()
         self.hidden_size_per_partition = mpu.divide(neox_args.hidden_size, world_size)
-        self.hidden_size_per_attention_head = mpu.divide(
-            neox_args.hidden_size, neox_args.num_attention_heads
-        )
+        # Use explicit head_dim if set (e.g., Nemotron where head_dim != hidden_size/num_heads)
+        if getattr(neox_args, "head_dim", None) is not None:
+            self.hidden_size_per_attention_head = neox_args.head_dim
+        else:
+            self.hidden_size_per_attention_head = mpu.divide(
+                neox_args.hidden_size, neox_args.num_attention_heads
+            )
         self.num_attention_heads_per_partition = mpu.divide(
             neox_args.num_attention_heads, world_size
         )
@@ -483,10 +487,11 @@ class ParallelSelfAttention(nn.Module):
             self.dropout_p = neox_args.attention_dropout
             self.attention_dropout = nn.Dropout(self.dropout_p)
 
-        # Output.
+        # Output. When head_dim is set explicitly, inner dim may differ from hidden_size.
+        attn_inner_size = self.num_attention_heads_per_partition * self.hidden_size_per_attention_head * world_size
         self.dense = RowParallelLinear(
             neox_args=neox_args,
-            input_size=neox_args.hidden_size,
+            input_size=attn_inner_size,
             output_size=neox_args.hidden_size,
             input_is_parallel=True,
             init_method=output_layer_init_method,
@@ -927,7 +932,7 @@ class ParallelSelfAttention(nn.Module):
 
         # [sq, b, np, hn] --> [sq, b, hp]
         new_context_layer_shape = context_layer.size()[:-2] + (
-            self.hidden_size_per_partition,
+            self.num_attention_heads_per_partition * self.hidden_size_per_attention_head,
         )
         context_layer = context_layer.view(*new_context_layer_shape)
 
