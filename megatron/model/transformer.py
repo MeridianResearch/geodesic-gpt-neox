@@ -380,10 +380,12 @@ class ParallelSelfAttention(nn.Module):
             )
         else:
             # QKV proj is smaller if we are using GQA / MQA
+            # Q dim = num_heads * head_dim (may differ from hidden_size with explicit head_dim)
+            q_hidden_size = neox_args.num_attention_heads * self.hidden_size_per_attention_head
             self.query_key_value = ColumnParallelLinear(
                 neox_args=neox_args,
                 input_size=neox_args.hidden_size,
-                output_size=neox_args.hidden_size + 2 * self.kv_hidden_size,
+                output_size=q_hidden_size + 2 * self.kv_hidden_size,
                 gather_output=False,
                 init_method=init_method,
                 bias=neox_args.use_bias_in_attn_linear,
