@@ -71,7 +71,6 @@
 
   # Evaluation settings
   "eval_tasks": ["mmlu_abstract_algebra", "mmlu_anatomy", "mmlu_astronomy", "mmlu_business_ethics", "mmlu_college_biology", "mmlu_college_chemistry", "mmlu_college_computer_science", "mmlu_college_mathematics", "mmlu_college_medicine", "mmlu_college_physics"],
-  "eval_batch_size": 4,
 
   # Training settings (not used for eval, but required)
   "train_micro_batch_size_per_gpu": 1,
