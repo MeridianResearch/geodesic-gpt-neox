@@ -1111,15 +1111,18 @@ class NeoXArgs(*BASE_CLASSES):
                 f"Nemotron hybrid pattern length ({len(nemotron_attn_config)}) "
                 f"must equal num_layers ({self.num_layers})"
             )
-            self.update_value("attention_config", [nemotron_attn_config])
+            # Set as already-expanded flat list (skip expand_attention_types)
+            self.update_value("attention_config", nemotron_attn_config)
 
         # Attention config
         if self.attention_config is None:
             self.update_value("attention_config", [[["global"], self.num_layers]])
-        self.update_value(
-            "attention_config",
-            expand_attention_types(self.attention_config, self.num_layers),
-        )
+        # Only expand if not already a flat list of strings (e.g., from nemotron pattern)
+        if self.attention_config and isinstance(self.attention_config[0], (list, tuple)):
+            self.update_value(
+                "attention_config",
+                expand_attention_types(self.attention_config, self.num_layers),
+            )
         assert (
             len(self.attention_config) == self.num_layers
         ), "Length of attention config list must equal num_layers"
