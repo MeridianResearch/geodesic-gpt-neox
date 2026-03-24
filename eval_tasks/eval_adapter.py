@@ -164,8 +164,8 @@ class EvalHarnessAdapter(HFLM):
         self.is_main = neox_args.rank == 0
         self.is_local_main = neox_args.local_rank == 0
         self.is_model_parallel = neox_args.model_parallel_size > 1
-        self.is_pipe_parallel = self.model.is_pipe_parallel
-        self.is_data_parallel = self.model.is_data_parallel
+        self.is_pipe_parallel = getattr(self.model, 'is_pipe_parallel', False)
+        self.is_data_parallel = getattr(self.model, 'is_data_parallel', True)
         self.is_last_stage = (
             True if not self.is_pipe_parallel else model.is_last_stage()
         )  # only the last stage of the pipeline model will receive the logits
