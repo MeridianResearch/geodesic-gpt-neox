@@ -342,19 +342,18 @@ class TestMamba2Helpers:
         assert out.shape == (4, 3, 8, 8), f"Expected (4, 3, 8, 8), got {out.shape}"
 
     def test_segment_sum_lower_triangular(self):
-        """segment_sum should produce a lower-triangular structure (upper = 0 before exp)."""
+        """segment_sum should produce a lower-triangular structure (upper = -inf, diagonal/lower = cumulative sums)."""
         from megatron.model.mamba.mamba2 import segment_sum
 
         x = torch.ones(1, 1, 4)
         out = segment_sum(x)
-        # The tril(diagonal=-1) + cumsum should give a strict lower triangular result:
-        # Row 0: [0, 0, 0, 0]
-        # Row 1: [1, 0, 0, 0]
-        # Row 2: [2, 1, 0, 0]
-        # Row 3: [3, 2, 1, 0]
-        expected = torch.tensor([[[[0, 0, 0, 0],
-                                    [1, 0, 0, 0],
-                                    [2, 1, 0, 0],
+        # segment_sum uses -inf for upper triangle (for exp to give 0)
+        # and cumulative sums for lower triangle + diagonal
+        # Diagonal is 0 (no terms summed), lower tri has cumsum values
+        ninf = float("-inf")
+        expected = torch.tensor([[[[0, ninf, ninf, ninf],
+                                    [1, 0, ninf, ninf],
+                                    [2, 1, 0, ninf],
                                     [3, 2, 1, 0]]]], dtype=x.dtype)
         torch.testing.assert_close(
             out, expected, msg="segment_sum should compute cumulative sums with lower-tri masking"
