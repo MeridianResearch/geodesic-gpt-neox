@@ -242,17 +242,18 @@ def _convert_attention_block(
 
 def _convert_moe_block(state_dict, hf_state, seq_idx, hf_prefix, n_routed_experts):
     """Convert a MoE block. Map gate, per-expert weights, and shared expert."""
-    # Router gate
+    # Router gate — NemotronMoE has self.router = NemotronSigmoidRouter(...)
+    # so the gate is at moe.router.gate.weight (not moe.gate.weight)
     gate_weight_key = f"{hf_prefix}.mixer.gate.weight"
     if gate_weight_key in hf_state:
-        state_dict[f"{seq_idx}.moe.gate.weight"] = (
+        state_dict[f"{seq_idx}.moe.router.gate.weight"] = (
             hf_state[gate_weight_key].clone().detach()
         )
 
-    # Expert score correction bias (used in some MoE variants)
+    # Expert score correction bias
     e_score_key = f"{hf_prefix}.mixer.gate.e_score_correction_bias"
     if e_score_key in hf_state:
-        state_dict[f"{seq_idx}.moe.e_score_correction_bias"] = (
+        state_dict[f"{seq_idx}.moe.router.e_score_correction_bias"] = (
             hf_state[e_score_key].clone().detach()
         )
 
