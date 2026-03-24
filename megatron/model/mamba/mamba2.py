@@ -126,8 +126,9 @@ class ParallelMamba2Block(nn.Module):
         dtype = {
             "fp16": torch.float16,
             "bf16": torch.bfloat16,
+            "bfloat16": torch.bfloat16,
             "fp32": torch.float32,
-        }[neox_args.precision]
+        }.get(neox_args.precision, torch.bfloat16)
         self.precision = dtype
         factory_kwargs = {"device": torch.cuda.current_device(), "dtype": dtype}
 
@@ -141,7 +142,7 @@ class ParallelMamba2Block(nn.Module):
         self.chunk_size = neox_args.mamba2_chunk_size
         self.expand = neox_args.mamba2_expand
 
-        self.intermediate_size = self.expand * self.d_model  # num_heads * head_dim
+        self.intermediate_size = self.num_heads * self.head_dim
         self.conv_dim = self.intermediate_size + 2 * self.n_groups * self.ssm_state_size
 
         self.time_step_limit = (0.0, float("inf"))

@@ -986,19 +986,19 @@ class TestNemotronConfigIntegration:
         assert '"-": "nemotron_mlp"' in source or "'-': 'nemotron_mlp'" in source
 
     def test_nemotron_hybrid_pattern_arg_exists(self):
-        """The nemotron_hybrid_pattern argument should exist in NeoXArgs."""
-        from megatron.neox_arguments.neox_args import NeoXArgsModel
+        """The nemotron_hybrid_pattern argument should exist in NeoXArgsNemotron."""
+        from megatron.neox_arguments.neox_args import NeoXArgsNemotron
 
         import inspect
-        source = inspect.getsource(NeoXArgsModel)
+        source = inspect.getsource(NeoXArgsNemotron)
         assert "nemotron_hybrid_pattern" in source
 
     def test_mamba2_args_exist(self):
-        """Mamba2-related arguments should exist in NeoXArgs."""
-        from megatron.neox_arguments.neox_args import NeoXArgsModel
+        """Mamba2-related arguments should exist in NeoXArgsMamba2."""
+        from megatron.neox_arguments.neox_args import NeoXArgsMamba2
 
         import inspect
-        source = inspect.getsource(NeoXArgsModel)
+        source = inspect.getsource(NeoXArgsMamba2)
         for arg in [
             "mamba2_num_heads",
             "mamba2_head_dim",
@@ -1008,7 +1008,7 @@ class TestNemotronConfigIntegration:
             "mamba2_chunk_size",
             "mamba2_expand",
         ]:
-            assert arg in source, f"Argument '{arg}' not found in NeoXArgsModel"
+            assert arg in source, f"Argument '{arg}' not found in NeoXArgsMamba2"
 
 
 # ===================================================================
