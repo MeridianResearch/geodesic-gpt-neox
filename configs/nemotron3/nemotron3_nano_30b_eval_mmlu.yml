@@ -65,8 +65,9 @@
   "scaled_upper_triang_masked_softmax_fusion": false,
   "precision": "bfloat16",
 
-  # Parallelism (single GPU for eval — 30B fits in 95GB GH200)
-  "pipe_parallel_size": 0,
+  # Parallelism — use pipe=1 to keep PipelineModule wrapper
+  # 30B fits on 1 GH200 (95GB) in bf16 (~60GB weights)
+  "pipe_parallel_size": 1,
   "model_parallel_size": 1,
 
   # Evaluation settings
