@@ -81,15 +81,17 @@ def segment_sum(input_tensor: torch.Tensor) -> torch.Tensor:
         otherwise (used to exponentiate into causal decay factors).
     """
     chunk_size = input_tensor.shape[-1]
-    # Expand to (B, n_chunks, chunk_size, chunk_size) via broadcasting.
-    input_tensor = input_tensor.unsqueeze(-1).expand(-1, -1, -1, chunk_size)
-    # Shift so that cumsum gives *exclusive* prefix sums along the correct
-    # diagonal. We want entry (i, j) = sum_{k=j+1}^{i} A_k, which is
-    # cumsum(A)[i] - cumsum(A)[j].
-    input_tensor = input_tensor.tril(diagonal=-1)
-    # Cumulative sum along the row dimension (dim=-2).
-    seg = input_tensor.cumsum(dim=-2)
-    return seg
+    # Expand last dim: (..., chunk_size) -> (..., chunk_size, chunk_size)
+    input_tensor = input_tensor[..., None].expand(*input_tensor.size(), chunk_size)
+    # Zero out upper triangle (keep lower triangle with diagonal=-1 for exclusive sums)
+    mask = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=-1)
+    input_tensor = input_tensor.masked_fill(~mask, 0)
+    # Cumulative sum along the row dimension (dim=-2)
+    tensor_segsum = torch.cumsum(input_tensor, dim=-2)
+    # Mask upper triangle to -inf (for exponentiation to 0)
+    mask_diag = torch.tril(torch.ones(chunk_size, chunk_size, device=input_tensor.device, dtype=torch.bool), diagonal=0)
+    tensor_segsum = tensor_segsum.masked_fill(~mask_diag, -torch.inf)
+    return tensor_segsum
 
 
 # ---------------------------------------------------------------------------
