@@ -1,0 +1,151 @@
+{
+  # Nemotron-3-Nano-30B Training Config Template
+  # Model: nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16
+  # Hybrid architecture: Mamba2 + MoE + Attention (52 layers)
+  # 30B total params, 3B active per token
+
+  # ============================================================
+  # Data
+  # ============================================================
+  "train_data_paths": ["/projects/a5k/public/data/YOUR_DATASET/YOUR_DATASET_text_document"],
+  "valid_data_paths": ["/projects/a5k/public/data/YOUR_DATASET/YOUR_DATASET_text_document"],
+  "test_data_paths": ["/projects/a5k/public/data/YOUR_DATASET/YOUR_DATASET_text_document"],
+  "vocab_file": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16/tokenizer/tokenizer.json",
+  "tokenizer_type": "HFTokenizer",
+  "data_impl": "mmap",
+
+  # ============================================================
+  # Architecture (Nemotron-3-Nano-30B)
+  # ============================================================
+  "num_layers": 52,
+  "hidden_size": 2688,
+  "num_attention_heads": 32,
+  "num_kv_heads": 2,
+  "head_dim": 128,
+  "seq_length": 4096,
+  "max_position_embeddings": 262144,
+  "make_vocab_size_divisible_by": 1,
+
+  # Nemotron hybrid block pattern (52 layers)
+  # M=Mamba2, E=MoE, *=Attention
+  "nemotron_hybrid_pattern": "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME",
+
+  # Norms and activations
+  "norm": "rmsnorm",
+  "rms_norm_epsilon": 1.0e-5,
+  "activation": "relu2",
+  "use_bias_in_attn_linear": false,
+  "use_bias_in_mlp": false,
+  "use_bias_in_norms": false,
+
+  # Positional embeddings — NoPE (No Positional Encoding)
+  # Nemotron attention layers have no positional encoding;
+  # position information comes from Mamba2's implicit encoding
+  "pos_emb": "none",
+
+  # Mamba2 SSM parameters
+  "mamba2_num_heads": 64,
+  "mamba2_head_dim": 64,
+  "mamba2_state_size": 128,
+  "mamba2_conv_kernel": 4,
+  "mamba2_n_groups": 8,
+  "mamba2_chunk_size": 128,
+  "mamba2_expand": 2,
+  "mamba2_use_conv_bias": true,
+
+  # MoE parameters
+  "moe_num_experts": 128,
+  "moe_n_shared_experts": 1,
+  "moe_top_k": 6,
+  "moe_routed_intermediate_size": 1856,
+  "moe_shared_expert_intermediate_size": 3712,
+  "moe_routed_scaling_factor": 2.5,
+  "moe_routing_type": "sigmoid_topk",
+  "moe_n_group": 1,
+  "moe_topk_group": 1,
+  "moe_e_score_correction": true,
+
+  # Model config
+  "no_weight_tying": true,
+  "gpt_j_residual": false,
+  "output_layer_parallelism": "column",
+  "scaled_upper_triang_masked_softmax_fusion": false,
+  "precision": "bfloat16",
+
+  # ============================================================
+  # Parallelism
+  # ============================================================
+  # 30B model fits on 1 GH200 (95GB) in bf16 (~60GB weights)
+  # For training, use PP=2 with ZeRO-1 for optimizer state sharding
+  "pipe_parallel_size": 1,
+  "model_parallel_size": 1,
+  "launcher": "slurm",
+  "deepspeed_slurm": true,
+  "no_ssh_check": true,
+
+  # ============================================================
+  # Training
+  # ============================================================
+  "train_iters": 1000,
+  "lr_decay_iters": 1000,
+  "distributed_backend": "nccl",
+  "lr_decay_style": "cosine",
+  "warmup": 0.01,
+  "split": "100,0,0",
+  "eval_interval": 1000000,
+  "eval_iters": 0,
+
+  # Optimization
+  "optimizer":
+    {
+      "type": "Adam",
+      "params": { "lr": 0.000225, "betas": [0.9, 0.95], "eps": 1.0e-8 },
+    },
+  "min_lr": 0.0,
+  "zero_optimization":
+    {
+      "stage": 1,
+      "allgather_partitions": true,
+      "allgather_bucket_size": 1260000000,
+      "overlap_comm": true,
+      "reduce_scatter": true,
+      "reduce_bucket_size": 1260000000,
+      "contiguous_gradients": true,
+      "cpu_offload": false,
+    },
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 1,
+  "gradient_clipping": 1,
+  "weight_decay": 0.1,
+  "hidden_dropout": 0,
+  "attention_dropout": 0,
+
+  # ============================================================
+  # Checkpointing
+  # ============================================================
+  "checkpoint_activations": true,
+  "checkpoint_num_layers": 1,
+  "partition_activations": false,
+  "synchronize_each_layer": false,
+  "checkpoint_factor": 200,
+  "extra_save_iters": [0],
+  "save": "/projects/a5k/public/checkpoints/sf_model_organisms/YOUR_EXPERIMENT_NAME",
+  "finetune": true,
+  "iteration": 0,
+  "load": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16",
+
+  # ============================================================
+  # Logging
+  # ============================================================
+  "checkpoint_validation_with_forward_pass": false,
+  "tensorboard_dir": "tensorboard",
+  "log_dir": "logs",
+  "log_interval": 1,
+  "steps_per_print": 1,
+  "wall_clock_breakdown": true,
+  "use_wandb": true,
+  "wandb_host": "https://api.wandb.ai",
+  "wandb_project": "Self-Fulfilling Model Organisms - Pretraining",
+  "wandb_team": "geodesic",
+  "wandb_run_name": "nemotron_30b_YOUR_EXPERIMENT",
+}
