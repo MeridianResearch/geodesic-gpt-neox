@@ -582,6 +582,73 @@ OLMo-3 models have important differences from standard GPT-NeoX models:
 
 4. **Iteration time**: ~10.5s per iteration on 16 nodes (64 GPUs). This is slower than TE-enabled configs (~7.5s) due to the lack of fused TE kernels.
 
+### Nemotron-3 Hybrid Model Support
+
+NVIDIA Nemotron-3 models are hybrid architectures combining Mamba2 (SSM), Mixture-of-Experts, and Attention blocks. Each block is a single component (NOT attention+MLP pairs like standard transformers).
+
+**Supported models:**
+- `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16` (30B total / 3B active, 52 layers)
+
+**Architecture:**
+- Layer pattern specified by `nemotron_hybrid_pattern` (e.g., `"MEMEM*EMEMEM*..."`)
+  - `M` = Mamba2 block (multi-head SSM with chunked scan)
+  - `E` = MoE block (128 routed + 1 shared expert, sigmoid routing, ReLU-squared)
+  - `*` = Attention-only block (GQA, NoPE - no positional encoding)
+- Hidden size 2688, head_dim 128 (differs from hidden_size/num_heads)
+- RMSNorm, no biases anywhere
+
+**HF-to-NeoX Conversion:**
+```bash
+isambard_sbatch run_on_compute.sbatch uv run python huggingface/convert_hf_nemotron_to_neox.py \
+    --hf-model nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16 \
+    --save-tokenizer
+```
+
+**Roundtrip validation (HF→NeoX→HF):**
+```bash
+# Step 1: Convert and reverse-convert
+isambard_sbatch run_on_compute.sbatch uv run python tools/neox_to_hf_nemotron_roundtrip.py --skip-eval
+
+# Step 2: Eval the roundtrip model
+isambard_sbatch run_on_compute.sbatch uv run lm_eval --model hf \
+    --model_args "pretrained=/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Nano-30B-roundtrip-HF,trust_remote_code=True,dtype=bfloat16" \
+    --tasks mmlu_abstract_algebra,mmlu_college_biology --batch_size 4
+```
+
+**Roundtrip MMLU results:** Perfect match (0.0% difference across all 10 subjects tested).
+
+**Key NeoX config settings for Nemotron:**
+```yaml
+"nemotron_hybrid_pattern": "MEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEM*EMEMEMEM*EMEMEMEME",
+"pos_emb": "none",           # NoPE for attention blocks
+"head_dim": 128,              # Explicit (differs from hidden_size/num_heads)
+"activation": "relu2",        # ReLU-squared for MoE experts
+"mamba2_num_heads": 64,
+"mamba2_head_dim": 64,
+"mamba2_state_size": 128,
+"moe_num_experts": 128,
+"moe_n_shared_experts": 1,
+"moe_top_k": 6,
+"moe_routed_scaling_factor": 2.5,
+"moe_routing_type": "sigmoid_topk",
+"moe_e_score_correction": true,
+```
+
+**New modules:**
+- `megatron/model/mamba/mamba2.py` — Mamba2 SSD block (pure PyTorch chunked scan)
+- `megatron/model/nemotron_moe.py` — MoE with shared experts + sigmoid routing
+- `megatron/model/nemotron_attn.py` — Attention-only residual block
+- `megatron/model/nemotron_mlp.py` — Plain MLP residual block
+
+**Dependencies:** `mamba_ssm>=2.3.1` and `causal_conv1d>=1.6.1` (installed via `uv pip install mamba-ssm causal-conv1d --no-build-isolation` on compute node)
+
+**Tests:** `tests/test_nemotron.py` (207 tests covering all new components)
+
+**Known limitations:**
+- NeoX eval harness (via PipelineModule) produces incorrect MMLU scores for Nemotron. The standalone forward pass and HF→NeoX→HF roundtrip are both verified correct. The issue is in the NeoX eval adapter's interaction with hybrid block types. Use HF lm_eval for evaluation instead.
+- MoE expert dispatch uses a simple loop (not MegaBlocks grouped GEMM). Adequate for eval, needs optimization for training at scale.
+- Only TP=1 conversion supported. TP>1 and expert parallelism not yet implemented.
+
 ### Known Bugs and Fixes
 
 **NaN loss with packed mode + label masking (FIXED in gpt2_model.py):**
