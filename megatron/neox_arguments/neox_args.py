@@ -1813,6 +1813,14 @@ class NeoXArgsMoE(NeoXArgsTemplate):
     Whether to use e_score_correction_bias in the MoE router (Nemotron style).
     """
 
+    moe_latent_size: int = None
+    """
+    Latent dimension for compressed MoE (Nemotron-3-Super style). When set,
+    tokens are projected hidden_size -> moe_latent_size before routing to experts,
+    and projected back moe_latent_size -> hidden_size after. Shared experts still
+    operate on full hidden_size. Reduces per-expert computation significantly.
+    """
+
 
 @dataclass
 class NeoXArgsMamba2(NeoXArgsTemplate):

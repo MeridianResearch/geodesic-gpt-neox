@@ -273,6 +273,13 @@ def _convert_moe_block(state_dict, hf_state, seq_idx, hf_prefix, n_routed_expert
         if hf_key in hf_state:
             state_dict[neox_key] = hf_state[hf_key].clone().detach()
 
+    # Latent compression projections (Nemotron-3-Super style)
+    for proj_name in ["fc1_latent_proj", "fc2_latent_proj"]:
+        hf_key = f"{hf_prefix}.mixer.{proj_name}.weight"
+        neox_key = f"{seq_idx}.moe.{proj_name}.weight"
+        if hf_key in hf_state:
+            state_dict[neox_key] = hf_state[hf_key].clone().detach()
+
 
 def save_neox_checkpoint(state_dicts, output_dir, iteration=0):
     """Save state dicts in NeoX checkpoint format.

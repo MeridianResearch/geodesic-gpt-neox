@@ -81,6 +81,12 @@ def reverse_convert_neox_to_hf(neox_sd, config):
                 if neox_key in neox_sd:
                     hf_sd[f"{hf_prefix}.mixer.shared_experts.{proj}.weight"] = neox_sd[neox_key].clone()
 
+            # Latent compression projections (Nemotron-3-Super)
+            for proj_name in ["fc1_latent_proj", "fc2_latent_proj"]:
+                neox_key = f"{seq_idx}.moe.{proj_name}.weight"
+                if neox_key in neox_sd:
+                    hf_sd[f"{hf_prefix}.mixer.{proj_name}.weight"] = neox_sd[neox_key].clone()
+
     # Final norm
     final_norm_idx = num_layers + 3
     hf_sd["backbone.norm_f.weight"] = neox_sd[f"{final_norm_idx}.norm.scale"].clone()

@@ -212,18 +212,34 @@ class NemotronMoE(nn.Module):
         self.top_k = neox_args.moe_top_k
         self.routed_scaling_factor = neox_args.moe_routed_scaling_factor
         self.n_shared_experts = getattr(neox_args, "moe_n_shared_experts", 1)
+        self.moe_latent_size = getattr(neox_args, "moe_latent_size", None)
 
         dtype = neox_args.params_dtype
 
-        # Router
+        # Router (operates on full hidden_size)
         self.router = NemotronSigmoidRouter(neox_args)
+
+        # Latent compression projections (Nemotron-3-Super style)
+        # When set, tokens are compressed before routing to experts
+        if self.moe_latent_size is not None:
+            self.fc1_latent_proj = nn.Linear(
+                self.hidden_size, self.moe_latent_size, bias=False, dtype=dtype
+            )
+            self.fc2_latent_proj = nn.Linear(
+                self.moe_latent_size, self.hidden_size, bias=False, dtype=dtype
+            )
+            expert_input_size = self.moe_latent_size
+        else:
+            self.fc1_latent_proj = None
+            self.fc2_latent_proj = None
+            expert_input_size = self.hidden_size
 
         # Routed experts
         routed_intermediate_size = neox_args.moe_routed_intermediate_size
         self.experts = nn.ModuleList(
             [
                 NemotronExpertMLP(
-                    hidden_size=self.hidden_size,
+                    hidden_size=expert_input_size,
                     intermediate_size=routed_intermediate_size,
                     init_method=init_method,
                     output_layer_init_method=output_layer_init_method,
@@ -271,13 +287,19 @@ class NemotronMoE(nn.Module):
         hidden_states_flat = hidden_states.view(-1, self.hidden_size)
         num_tokens = hidden_states_flat.shape[0]
 
-        # Route tokens
+        # Route tokens (routing on full hidden_size)
         routing_weights, selected_experts = self.router(
             hidden_states_flat
         )  # both [num_tokens, top_k]
 
+        # Latent compression for routed experts (if enabled)
+        if self.fc1_latent_proj is not None:
+            expert_input_flat = self.fc1_latent_proj(hidden_states_flat)
+        else:
+            expert_input_flat = hidden_states_flat
+
         # Dispatch to routed experts (simple loop implementation)
-        final_hidden_states = torch.zeros_like(hidden_states_flat)
+        routed_output = torch.zeros_like(expert_input_flat)
 
         for expert_idx in range(self.n_routed_experts):
             expert = self.experts[expert_idx]
@@ -290,8 +312,6 @@ class NemotronMoE(nn.Module):
                 continue
 
             # Compute the routing weight for this expert per token.
-            # A token may have selected this expert in multiple top_k slots
-            # (extremely unlikely but handled for correctness).
             expert_weights = (
                 routing_weights * expert_mask.to(routing_weights.dtype)
             ).sum(
@@ -300,15 +320,21 @@ class NemotronMoE(nn.Module):
 
             # Gather tokens assigned to this expert
             token_indices = token_mask.nonzero(as_tuple=True)[0]
-            expert_input = hidden_states_flat[token_indices]
+            expert_input = expert_input_flat[token_indices]
 
             # Run expert MLP
             expert_output = expert(expert_input)
 
             # Weighted scatter back
-            final_hidden_states[token_indices] += (
+            routed_output[token_indices] += (
                 expert_weights[token_indices, None] * expert_output
             )
+
+        # Latent decompression for routed output
+        if self.fc2_latent_proj is not None:
+            final_hidden_states = self.fc2_latent_proj(routed_output)
+        else:
+            final_hidden_states = routed_output
 
         # Apply routed scaling factor
         final_hidden_states = final_hidden_states * self.routed_scaling_factor

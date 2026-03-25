@@ -1,0 +1,90 @@
+{
+  # Nemotron-3-Super-120B Evaluation Config (MMLU)
+  # Model: nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16
+  # Hybrid architecture: Mamba2 + MoE + Attention (88 layers)
+  # 120B total params, 12B active per token
+
+  "load": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16",
+  "finetune": true,
+  "iteration": 0,
+
+  # Architecture
+  "num_layers": 88,
+  "hidden_size": 4096,
+  "num_attention_heads": 32,
+  "num_kv_heads": 2,
+  "head_dim": 128,
+  "seq_length": 4096,
+  "max_position_embeddings": 1048576,
+  "make_vocab_size_divisible_by": 1,
+
+  # Nemotron hybrid block pattern (88 layers)
+  "nemotron_hybrid_pattern": "MEMEMEM*EMEMEMEM*EMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEMEM*EMEMEMEM*EMEMEMEME",
+
+  # Norms and activations
+  "norm": "rmsnorm",
+  "rms_norm_epsilon": 1.0e-5,
+  "activation": "relu2",
+  "use_bias_in_attn_linear": false,
+  "use_bias_in_mlp": false,
+  "use_bias_in_norms": false,
+
+  # Positional embeddings - NoPE
+  "pos_emb": "none",
+
+  # Mamba2 parameters
+  "mamba2_num_heads": 128,
+  "mamba2_head_dim": 64,
+  "mamba2_state_size": 128,
+  "mamba2_conv_kernel": 4,
+  "mamba2_n_groups": 8,
+  "mamba2_chunk_size": 128,
+  "mamba2_expand": 2,
+  "mamba2_use_conv_bias": true,
+
+  # MoE parameters
+  "moe_num_experts": 512,
+  "moe_n_shared_experts": 1,
+  "moe_top_k": 22,
+  "moe_routed_intermediate_size": 2688,
+  "moe_shared_expert_intermediate_size": 5376,
+  "moe_routed_scaling_factor": 5.0,
+  "moe_routing_type": "sigmoid_topk",
+  "moe_n_group": 1,
+  "moe_topk_group": 1,
+  "moe_e_score_correction": true,
+  "moe_latent_size": 1024,
+
+  # Tokenizer
+  "vocab_file": "/projects/a5k/public/checkpoints/sf_model_organisms/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16/tokenizer/tokenizer.json",
+  "tokenizer_type": "HFTokenizer",
+
+  # Model config
+  "no_weight_tying": true,
+  "gpt_j_residual": false,
+  "output_layer_parallelism": "column",
+  "scaled_upper_triang_masked_softmax_fusion": false,
+  "precision": "bfloat16",
+
+  # Parallelism
+  "pipe_parallel_size": 1,
+  "model_parallel_size": 1,
+
+  # Evaluation settings
+  "eval_tasks": ["mmlu_abstract_algebra", "mmlu_anatomy", "mmlu_astronomy", "mmlu_business_ethics", "mmlu_college_biology", "mmlu_college_chemistry", "mmlu_college_computer_science", "mmlu_college_mathematics", "mmlu_college_medicine", "mmlu_college_physics"],
+
+  # Training settings (required but unused for eval)
+  "train_micro_batch_size_per_gpu": 1,
+  "gradient_accumulation_steps": 1,
+  "train_iters": 0,
+  "zero_optimization": {"stage": 0},
+  "optimizer": {"type": "Adam", "params": {"lr": 0.0001}},
+
+  # Logging
+  "log_interval": 1,
+  "steps_per_print": 1,
+  "use_wandb": false,
+
+  # Checkpointing
+  "checkpoint_activations": false,
+}
