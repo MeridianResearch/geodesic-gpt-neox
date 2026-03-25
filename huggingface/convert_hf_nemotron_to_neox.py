@@ -95,6 +95,18 @@ def convert_nemotron_to_neox_state_dict(model, config):
     num_layers = config.num_hidden_layers
     hf_state = model.state_dict()
 
+    # Auto-detect HF key prefix: some models use "backbone.*", others use "model.*"
+    if "backbone.embeddings.weight" in hf_state:
+        prefix = "backbone"
+    elif "model.embeddings.weight" in hf_state:
+        prefix = "model"
+    else:
+        raise ValueError(
+            f"Cannot detect HF key prefix. Expected 'backbone.embeddings.weight' or "
+            f"'model.embeddings.weight'. Found keys: {list(hf_state.keys())[:5]}"
+        )
+    print(f"  HF key prefix: '{prefix}'")
+
     # Parse the hybrid pattern to determine block types
     pattern = config.hybrid_override_pattern
     block_types = parse_hybrid_pattern(pattern)
@@ -112,7 +124,7 @@ def convert_nemotron_to_neox_state_dict(model, config):
 
     # Embedding layer (index 0)
     state_dict["0.word_embeddings.weight"] = (
-        hf_state["backbone.embeddings.weight"].clone().detach()
+        hf_state[f"{prefix}.embeddings.weight"].clone().detach()
     )
     print(f"Converted embedding: {state_dict['0.word_embeddings.weight'].shape}")
 
@@ -148,7 +160,7 @@ def convert_nemotron_to_neox_state_dict(model, config):
     # Transformer layers (indices 2 to num_layers+1)
     for layer_idx in tqdm(range(num_layers), desc="Converting layers"):
         seq_idx = layer_idx + 2
-        hf_prefix = f"backbone.layers.{layer_idx}"
+        hf_prefix = f"{prefix}.layers.{layer_idx}"
         block_type = block_types[layer_idx]
 
         # Pre-norm (all block types have this)
@@ -173,7 +185,7 @@ def convert_nemotron_to_neox_state_dict(model, config):
     # Final layer norm (index num_layers + 3)
     final_norm_idx = num_layers + 3
     state_dict[f"{final_norm_idx}.norm.scale"] = (
-        hf_state["backbone.norm_f.weight"].clone().detach()
+        hf_state[f"{prefix}.norm_f.weight"].clone().detach()
     )
     print("Converted final layer norm")
 

@@ -26,15 +26,23 @@ def reverse_convert_neox_to_hf(neox_sd, config):
     num_kv_heads = getattr(config, "num_key_value_heads", num_heads)
     head_dim = getattr(config, "head_dim", config.hidden_size // num_heads)
 
+    # Auto-detect prefix from the original HF model
+    # Newer Nemotron models use "model.*", older use "backbone.*"
+    prefix = getattr(config, "_hf_prefix", None)
+    if prefix is None:
+        # Try to infer from model class name or config
+        prefix = "model"  # default for newer models
+    print(f"  Using HF prefix: '{prefix}'")
+
     # Embedding
-    hf_sd["backbone.embeddings.weight"] = neox_sd["0.word_embeddings.weight"].clone()
-    print(f"Reversed embedding: {hf_sd['backbone.embeddings.weight'].shape}")
+    hf_sd[f"{prefix}.embeddings.weight"] = neox_sd["0.word_embeddings.weight"].clone()
+    print(f"Reversed embedding: {hf_sd[f'{prefix}.embeddings.weight'].shape}")
 
     # Layers
     for layer_idx in tqdm(range(num_layers), desc="Reversing layers"):
         seq_idx = layer_idx + 2
         block_type = block_types[layer_idx]
-        hf_prefix = f"backbone.layers.{layer_idx}"
+        hf_prefix = f"{prefix}.layers.{layer_idx}"
 
         # Norm
         hf_sd[f"{hf_prefix}.norm.weight"] = neox_sd[f"{seq_idx}.norm.scale"].clone()
@@ -89,7 +97,7 @@ def reverse_convert_neox_to_hf(neox_sd, config):
 
     # Final norm
     final_norm_idx = num_layers + 3
-    hf_sd["backbone.norm_f.weight"] = neox_sd[f"{final_norm_idx}.norm.scale"].clone()
+    hf_sd[f"{prefix}.norm_f.weight"] = neox_sd[f"{final_norm_idx}.norm.scale"].clone()
 
     # LM head
     output_idx = num_layers + 4
