@@ -8,7 +8,7 @@
 #
 # Usage:
 #   sbatch vscode_tunnel.sh
-#   tail -f /projects/a5k/public/logs/code_tunnel/code_tunnel_<JOB_ID>.out
+#   tail -f logs/debug/code_tunnel_<JOB_ID>.out
 #   # Follow the GitHub device code prompt, then open the vscode.dev link.
 #
 # Reference: https://docs.isambard.ac.uk/user-documentation/guides/vscode/
@@ -17,7 +17,7 @@
 #SBATCH --gpus-per-node=4
 #SBATCH --ntasks-per-node=1
 #SBATCH --time=24:00:00
-#SBATCH --output=/projects/a5k/public/logs/code_tunnel/code_tunnel_%j.out
+#SBATCH --output=/projects/a5k/public/logs_%u/code_tunnel/code_tunnel_%j.out
 
 module purge
 module load PrgEnv-cray

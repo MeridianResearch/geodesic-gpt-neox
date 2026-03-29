@@ -71,5 +71,5 @@
   "checkpoint_activations": false,
   "checkpoint_factor": 1000000,
   "no_save_optim": true,
-  "save": "/projects/a5k/public/tmp/test_training_loss_checkpoint",
+  "save": "/tmp/test_training_loss_checkpoint",
 }
