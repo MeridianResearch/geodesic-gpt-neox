@@ -31,8 +31,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from megatron import mpu
 from megatron.model.activations import relu_squared
 from megatron.model.norms import get_norm
+from megatron.model.utils import get_parallel_linear
 from megatron.neox_arguments.arguments import NeoXArgs
 
 
@@ -185,18 +187,78 @@ class NemotronSigmoidRouter(nn.Module):
         return routing_weights, selected_experts
 
 
+class NemotronSharedExpertMLP(nn.Module):
+    """
+    Shared expert MLP with tensor parallelism.
+
+    Uses ColumnParallelLinear for the up-projection and RowParallelLinear
+    for the down-projection, following the standard MLP TP pattern.
+    The RowParallelLinear performs the all-reduce.
+    """
+
+    def __init__(
+        self,
+        neox_args: NeoXArgs,
+        hidden_size: int,
+        intermediate_size: int,
+        init_method=None,
+        output_layer_init_method=None,
+    ):
+        super().__init__()
+
+        if init_method is None:
+            init_method = nn.init.xavier_normal_
+        if output_layer_init_method is None:
+            output_layer_init_method = init_method
+
+        ColumnParallelLinear, RowParallelLinear = get_parallel_linear(neox_args)
+
+        self.up_proj = ColumnParallelLinear(
+            neox_args=neox_args,
+            input_size=hidden_size,
+            output_size=intermediate_size,
+            gather_output=False,
+            init_method=init_method,
+            skip_bias_add=True,
+            bias=False,
+        )
+        self.down_proj = RowParallelLinear(
+            neox_args=neox_args,
+            input_size=intermediate_size,
+            output_size=hidden_size,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
+            bias=False,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x, _ = self.up_proj(x)
+        x = relu_squared(x)
+        x, _ = self.down_proj(x)
+        return x
+
+
 class NemotronMoE(nn.Module):
     """
     Full Nemotron MoE layer combining sigmoid router, routed experts, and shared expert.
 
-    The forward pass:
-    1. Route tokens via sigmoid top-k router
-    2. Dispatch tokens to selected routed experts, weight and sum outputs
-    3. Scale routed output by routed_scaling_factor
-    4. Add shared expert output
+    Tensor parallelism strategy (expert parallelism):
+    - Router gate: replicated on all TP ranks (all ranks compute full routing)
+    - Routed experts: partitioned across TP ranks. Each rank holds
+      ``n_routed_experts // tp_size`` experts.
+    - Shared expert(s): tensor-parallel via ColumnParallel/RowParallel linear.
+    - Latent projections (if present): replicated (small size).
+    - Forward: all ranks compute routing decisions identically, each rank
+      processes only its local subset of experts, then an all-reduce across
+      the TP group combines the partial routed outputs.
 
-    This uses a simple loop-based expert dispatch suitable for evaluation.
-    For training, replace with a batched/fused implementation.
+    The forward pass:
+    1. Route tokens via sigmoid top-k router (replicated across ranks)
+    2. Dispatch tokens to local routed experts, weight and sum outputs
+    3. All-reduce routed output across TP ranks
+    4. Scale routed output by routed_scaling_factor
+    5. Add shared expert output (TP-parallel, includes its own all-reduce)
     """
 
     def __init__(
@@ -216,11 +278,45 @@ class NemotronMoE(nn.Module):
 
         dtype = neox_args.params_dtype
 
-        # Router (operates on full hidden_size)
+        # TP setup for expert parallelism
+        self.tp_size = mpu.get_model_parallel_world_size()
+        self.tp_rank = mpu.get_model_parallel_rank()
+
+        assert self.n_routed_experts % self.tp_size == 0, (
+            f"n_routed_experts ({self.n_routed_experts}) must be divisible by "
+            f"tp_size ({self.tp_size})"
+        )
+        self.n_local_experts = self.n_routed_experts // self.tp_size
+        self.local_expert_start = self.tp_rank * self.n_local_experts
+        self.local_expert_end = self.local_expert_start + self.n_local_experts
+
+        # Router (replicated across ranks - operates on full hidden_size,
+        # produces scores for ALL experts so routing decisions are identical)
         self.router = NemotronSigmoidRouter(neox_args)
 
+        # Register gradient hooks to all-reduce gradients of replicated router
+        # parameters across the TP group. With expert parallelism, each rank
+        # processes different experts, so the gradient on the replicated gate
+        # weight (and e_score_correction_bias) will differ across TP ranks.
+        if self.tp_size > 1:
+            tp_group = mpu.get_model_parallel_group()
+
+            def _allreduce_hook(grad, group=tp_group):
+                """Sum partial gradients from each TP rank for replicated params."""
+                torch.distributed.all_reduce(
+                    grad, op=torch.distributed.ReduceOp.SUM, group=group
+                )
+                return grad
+
+            self.router.gate.weight.register_hook(_allreduce_hook)
+            if self.router.e_score_correction_bias is not None:
+                self.router.e_score_correction_bias.register_hook(_allreduce_hook)
+
         # Latent compression projections (Nemotron-3-Super style)
-        # When set, tokens are compressed before routing to experts
+        # Kept replicated since latent_size is small.
+        # No gradient hooks needed: fc1_latent_proj gradient is correct because
+        # copy_to_model_parallel_region all-reduces it in backward. fc2_latent_proj
+        # gradient is correct because its input (routed_output) is already all-reduced.
         if self.moe_latent_size is not None:
             self.fc1_latent_proj = nn.Linear(
                 self.hidden_size, self.moe_latent_size, bias=False, dtype=dtype
@@ -234,7 +330,7 @@ class NemotronMoE(nn.Module):
             self.fc2_latent_proj = None
             expert_input_size = self.hidden_size
 
-        # Routed experts
+        # Local routed experts (only this rank's partition)
         routed_intermediate_size = neox_args.moe_routed_intermediate_size
         self.experts = nn.ModuleList(
             [
@@ -245,29 +341,29 @@ class NemotronMoE(nn.Module):
                     output_layer_init_method=output_layer_init_method,
                     dtype=dtype,
                 )
-                for _ in range(self.n_routed_experts)
+                for _ in range(self.n_local_experts)
             ]
         )
 
-        # Shared expert(s)
+        # Shared expert(s) - tensor-parallel via ColumnParallel/RowParallel
         shared_intermediate_size = neox_args.moe_shared_expert_intermediate_size
         if self.n_shared_experts == 1:
-            self.shared_expert = NemotronExpertMLP(
+            self.shared_expert = NemotronSharedExpertMLP(
+                neox_args=neox_args,
                 hidden_size=self.hidden_size,
                 intermediate_size=shared_intermediate_size,
                 init_method=init_method,
                 output_layer_init_method=output_layer_init_method,
-                dtype=dtype,
             )
         else:
             self.shared_expert = nn.ModuleList(
                 [
-                    NemotronExpertMLP(
+                    NemotronSharedExpertMLP(
+                        neox_args=neox_args,
                         hidden_size=self.hidden_size,
                         intermediate_size=shared_intermediate_size,
                         init_method=init_method,
                         output_layer_init_method=output_layer_init_method,
-                        dtype=dtype,
                     )
                     for _ in range(self.n_shared_experts)
                 ]
@@ -282,12 +378,14 @@ class NemotronMoE(nn.Module):
             output: [seq_len, batch_size, hidden_size]
             bias: None (no bias in this implementation)
         """
+        if not hasattr(self, '_dbg') and torch.distributed.get_rank() == 0:
+            print(f'[FWD] MoE layer start', flush=True)
         original_shape = hidden_states.shape
         # Flatten to [num_tokens, hidden_size]
         hidden_states_flat = hidden_states.view(-1, self.hidden_size)
         num_tokens = hidden_states_flat.shape[0]
 
-        # Route tokens (routing on full hidden_size)
+        # Route tokens (replicated across ranks - all ranks get identical results)
         routing_weights, selected_experts = self.router(
             hidden_states_flat
         )  # both [num_tokens, top_k]
@@ -298,14 +396,23 @@ class NemotronMoE(nn.Module):
         else:
             expert_input_flat = hidden_states_flat
 
-        # Dispatch to routed experts (simple loop implementation)
+        # Insert autograd-compatible identity/all-reduce boundary for expert parallelism.
+        # copy_to_model_parallel_region: identity in forward (input is already replicated),
+        # all-reduce in backward (combines partial gradients from each rank's local experts).
+        if self.tp_size > 1:
+            expert_input_flat = mpu.copy_to_model_parallel_region(expert_input_flat)
+
+        # Dispatch to LOCAL routed experts only.
+        # Each rank processes experts [local_expert_start, local_expert_end).
+        # The output tensor accumulates partial results; an all-reduce combines them.
         routed_output = torch.zeros_like(expert_input_flat)
 
-        for expert_idx in range(self.n_routed_experts):
-            expert = self.experts[expert_idx]
+        for local_idx in range(self.n_local_experts):
+            global_expert_idx = self.local_expert_start + local_idx
+            expert = self.experts[local_idx]
 
             # Find which tokens selected this expert (in any of their top_k slots)
-            expert_mask = (selected_experts == expert_idx)  # [num_tokens, top_k]
+            expert_mask = (selected_experts == global_expert_idx)  # [num_tokens, top_k]
             token_mask = expert_mask.any(dim=-1)  # [num_tokens]
 
             if not token_mask.any():
@@ -330,6 +437,16 @@ class NemotronMoE(nn.Module):
                 expert_weights[token_indices, None] * expert_output
             )
 
+        # All-reduce routed output across TP ranks to combine all experts' contributions.
+        # reduce_from_model_parallel_region: all-reduce in forward, identity in backward.
+        # Combined with copy_to_model_parallel_region above, this gives correct gradients:
+        # forward = identity(input) -> local_experts -> all_reduce(output)
+        # backward = all_reduce(grad_input) <- local_experts <- identity(grad_output)
+        if self.tp_size > 1:
+            routed_output = mpu.reduce_from_model_parallel_region(routed_output)
+
+        if not hasattr(self, '_dbg') and torch.distributed.get_rank() == 0:
+            print(f'[FWD] MoE after reduce', flush=True)
         # Latent decompression for routed output
         if self.fc2_latent_proj is not None:
             final_hidden_states = self.fc2_latent_proj(routed_output)
@@ -339,7 +456,7 @@ class NemotronMoE(nn.Module):
         # Apply routed scaling factor
         final_hidden_states = final_hidden_states * self.routed_scaling_factor
 
-        # Shared expert
+        # Shared expert (TP-parallel, includes its own all-reduce via RowParallelLinear)
         if self.n_shared_experts == 1:
             shared_output = self.shared_expert(hidden_states_flat)
         else:

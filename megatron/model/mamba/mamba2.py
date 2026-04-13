@@ -28,7 +28,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from megatron import mpu
 from megatron.model.norms import MambaRMSNormGated, get_norm
+from megatron.model.utils import get_parallel_linear
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,7 @@ class ParallelMamba2Block(nn.Module):
         self.precision = dtype
         factory_kwargs = {"device": torch.cuda.current_device(), "dtype": dtype}
 
-        # ----- model dimensions -----
+        # ----- model dimensions (full, before TP partitioning) -----
         self.d_model = neox_args.hidden_size
         self.num_heads = neox_args.mamba2_num_heads
         self.head_dim = neox_args.mamba2_head_dim
@@ -145,24 +147,44 @@ class ParallelMamba2Block(nn.Module):
         self.expand = neox_args.mamba2_expand
 
         self.intermediate_size = self.num_heads * self.head_dim
-        self.conv_dim = self.intermediate_size + 2 * self.n_groups * self.ssm_state_size
 
         self.time_step_limit = (0.0, float("inf"))
 
-        # Compute d_mlp: extra MLP lanes that bypass the SSM.
-        # projection_size = d_mlp*2 + intermediate_size + conv_dim + num_heads
-        # where conv_dim = intermediate_size + 2*n_groups*ssm_state_size
-        # Solve for total first, then derive d_mlp.
-        _proj_no_mlp = 2 * self.intermediate_size + 2 * self.n_groups * self.ssm_state_size + self.num_heads
-        # d_mlp must be non-negative and even (split into two equal halves).
-        # In the Nemotron-3 config, d_mlp is typically 0.
-        self.projection_size = _proj_no_mlp  # default: no MLP bypass
+        # d_mlp: extra MLP lanes that bypass the SSM (typically 0 for Nemotron-3).
         self.d_mlp = 0
+
+        # ----- TP setup: split by heads across ranks -----
+        tp_size = mpu.get_model_parallel_world_size()
+        assert self.num_heads % tp_size == 0, (
+            f"num_heads ({self.num_heads}) must be divisible by tp_size ({tp_size})"
+        )
+        assert self.n_groups % tp_size == 0, (
+            f"n_groups ({self.n_groups}) must be divisible by tp_size ({tp_size})"
+        )
+
+        self.num_heads_per_rank = self.num_heads // tp_size
+        self.n_groups_per_rank = self.n_groups // tp_size
+        self.intermediate_size_per_rank = self.num_heads_per_rank * self.head_dim
+        self.conv_dim_per_rank = (
+            self.intermediate_size_per_rank
+            + 2 * self.n_groups_per_rank * self.ssm_state_size
+        )
+        # Full (non-partitioned) dimensions for ColumnParallelLinear output_size
+        self.conv_dim = self.intermediate_size + 2 * self.n_groups * self.ssm_state_size
+
+        self.tp_size = tp_size
+        self.tp_rank = mpu.get_model_parallel_rank()
+
+        ColumnParallelLinear, RowParallelLinear = get_parallel_linear(neox_args)
 
         # ----- layers -----
 
-        # Single input projection: produces gate, conv input (hidden+B+C), dt, and
-        # optionally the MLP bypass lanes.
+        # Input projection: replicated nn.Linear (NOT ColumnParallelLinear).
+        # The output has mixed semantics [gate || hidden || B || C || dt] where
+        # each section must be split by heads/groups, not by contiguous halves.
+        # ColumnParallelLinear would misalign these boundaries.
+        # We replicate the projection and manually slice per-rank in forward().
+        self.projection_size = self.intermediate_size + self.conv_dim + self.num_heads
         self.in_proj = nn.Linear(
             self.d_model,
             self.projection_size,
@@ -170,23 +192,23 @@ class ParallelMamba2Block(nn.Module):
             **factory_kwargs,
         )
 
-        # Depthwise causal convolution over (hidden_states || B || C).
+        # Depthwise causal convolution over (hidden_states || B || C) -- per rank.
         self.conv1d = nn.Conv1d(
-            in_channels=self.conv_dim,
-            out_channels=self.conv_dim,
+            in_channels=self.conv_dim_per_rank,
+            out_channels=self.conv_dim_per_rank,
             bias=True,
             kernel_size=self.conv_kernel,
-            groups=self.conv_dim,
+            groups=self.conv_dim_per_rank,
             padding=self.conv_kernel - 1,
             **factory_kwargs,
         )
 
-        # SSM parameters (kept in float32 for numerical stability)
+        # SSM parameters -- per rank (only this rank's heads)
         self.A_log = nn.Parameter(
             torch.log(
                 torch.arange(
                     1,
-                    self.num_heads + 1,
+                    self.num_heads_per_rank + 1,
                     dtype=torch.float32,
                     device=torch.cuda.current_device(),
                 )
@@ -196,7 +218,7 @@ class ParallelMamba2Block(nn.Module):
 
         self.D = nn.Parameter(
             torch.ones(
-                self.num_heads,
+                self.num_heads_per_rank,
                 dtype=torch.float32,
                 device=torch.cuda.current_device(),
             )
@@ -205,7 +227,7 @@ class ParallelMamba2Block(nn.Module):
 
         self.dt_bias = nn.Parameter(
             torch.zeros(
-                self.num_heads,
+                self.num_heads_per_rank,
                 dtype=torch.float32,
                 device=torch.cuda.current_device(),
             )
@@ -215,7 +237,7 @@ class ParallelMamba2Block(nn.Module):
         # Initialize dt_bias so that softplus(dt_bias) is in a reasonable range.
         dt_min, dt_max = 0.001, 0.1
         dt = torch.exp(
-            torch.rand(self.num_heads, device=torch.cuda.current_device())
+            torch.rand(self.num_heads_per_rank, device=torch.cuda.current_device())
             * (math.log(dt_max) - math.log(dt_min))
             + math.log(dt_min)
         )
@@ -224,15 +246,18 @@ class ParallelMamba2Block(nn.Module):
         with torch.no_grad():
             self.dt_bias.copy_(inv_dt)
 
-        # Gated RMSNorm applied to SSM output before out_proj.
-        self.norm = MambaRMSNormGated(self.intermediate_size, eps=1e-6)
+        # Gated RMSNorm applied to SSM output before out_proj -- per rank.
+        self.norm = MambaRMSNormGated(self.intermediate_size_per_rank, eps=1e-6)
 
-        # Down-projection back to model dimension.
-        self.out_proj = nn.Linear(
-            self.intermediate_size,
-            self.d_model,
+        # Down-projection back to model dimension: row-parallel, all-reduces output.
+        self.out_proj = RowParallelLinear(
+            neox_args=neox_args,
+            input_size=self.intermediate_size,
+            output_size=self.d_model,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
             bias=False,
-            **factory_kwargs,
         )
 
     # ------------------------------------------------------------------
@@ -265,6 +290,9 @@ class ParallelMamba2Block(nn.Module):
         state_size = B.shape[-1]
         chunk_size = self.chunk_size
         orig_dtype = hidden_states.dtype
+
+        # Ensure CUDA context for backward pass compatibility
+        torch.cuda.set_device(hidden_states.device)
 
         # Run entire chunked scan in float32 for numerical stability.
         hidden_states = hidden_states.float()
@@ -451,81 +479,95 @@ class ParallelMamba2Block(nn.Module):
         # NeoX convention: (seq, batch, dim)
         seq_len, batch, dim = hidden_states.shape
 
+        # Ensure CUDA context is set for this device (prevents cuBLAS context
+        # errors during backward pass in multi-GPU training)
+        torch.cuda.set_device(hidden_states.device)
+
         # Transpose to (batch, seq, dim) for the rest of the computation.
         hidden_states = hidden_states.transpose(0, 1).contiguous()  # (B, L, D)
 
-        # ---- 1. Input projection ----
-        projected_states = self.in_proj(hidden_states)  # (B, L, projection_size)
+        # ---- 1. Input projection (replicated) + per-rank slicing ----
+        # Full projection: [gate(intermediate) || hidden_B_C(conv_dim) || dt(num_heads)]
+        projected = self.in_proj(hidden_states)  # (B, L, projection_size)
 
-        if self.d_mlp > 0:
-            # Split: [d_mlp, d_mlp, intermediate_size, conv_dim, num_heads]
-            mlp_z, mlp_x, gate, hidden_B_C, dt = projected_states.split(
-                [
-                    self.d_mlp,
-                    self.d_mlp,
-                    self.intermediate_size,
-                    self.conv_dim,
-                    self.num_heads,
-                ],
-                dim=-1,
-            )
-        else:
-            # Split: [intermediate_size, conv_dim, num_heads]
-            gate, hidden_B_C, dt = projected_states.split(
-                [self.intermediate_size, self.conv_dim, self.num_heads],
-                dim=-1,
-            )
+        # Split into three semantic sections (full dimensions)
+        gate_full, hidden_B_C_full, dt_full = projected.split(
+            [self.intermediate_size, self.conv_dim, self.num_heads],
+            dim=-1,
+        )
 
-        # ---- 2. Causal convolution ----
+        # Slice each section for this TP rank (split by heads/groups)
+        # Gate: split intermediate_size by heads
+        h_start = self.tp_rank * self.intermediate_size_per_rank
+        h_end = h_start + self.intermediate_size_per_rank
+        gate = gate_full[..., h_start:h_end]
+
+        # hidden_B_C: split [hidden(by heads) || B(by groups) || C(by groups)]
+        h_slice = hidden_B_C_full[..., h_start:h_end]  # hidden states for this rank's heads
+        bc_per_group = self.ssm_state_size
+        b_start = self.intermediate_size + self.tp_rank * self.n_groups_per_rank * bc_per_group
+        b_end = b_start + self.n_groups_per_rank * bc_per_group
+        b_slice = hidden_B_C_full[..., b_start:b_end]
+        c_start = self.intermediate_size + self.n_groups * bc_per_group + self.tp_rank * self.n_groups_per_rank * bc_per_group
+        c_end = c_start + self.n_groups_per_rank * bc_per_group
+        c_slice = hidden_B_C_full[..., c_start:c_end]
+        hidden_B_C = torch.cat([h_slice, b_slice, c_slice], dim=-1)  # (B, L, conv_dim_per_rank)
+
+        # dt: split by heads
+        dt_start = self.tp_rank * self.num_heads_per_rank
+        dt_end = dt_start + self.num_heads_per_rank
+        dt = dt_full[..., dt_start:dt_end]
+
+        # ---- 2. Causal convolution (per-rank conv_dim) ----
         # conv1d expects (B, C, L)
-        hidden_B_C = hidden_B_C.transpose(1, 2).contiguous()  # (B, conv_dim, L)
+        hidden_B_C = hidden_B_C.transpose(1, 2).contiguous()  # (B, conv_dim_per_rank, L)
         hidden_B_C = self.conv1d(hidden_B_C)[..., :seq_len]  # causal: trim future
         hidden_B_C = F.silu(hidden_B_C)
-        hidden_B_C = hidden_B_C.transpose(1, 2).contiguous()  # (B, L, conv_dim)
+        hidden_B_C = hidden_B_C.transpose(1, 2).contiguous()  # (B, L, conv_dim_per_rank)
 
-        # ---- 3. Split into hidden_states, B, C ----
+        # ---- 3. Split into hidden_states, B, C (per-rank dimensions) ----
         hidden_ssm, B, C = hidden_B_C.split(
             [
-                self.intermediate_size,
-                self.n_groups * self.ssm_state_size,
-                self.n_groups * self.ssm_state_size,
+                self.intermediate_size_per_rank,
+                self.n_groups_per_rank * self.ssm_state_size,
+                self.n_groups_per_rank * self.ssm_state_size,
             ],
             dim=-1,
         )
 
-        # Reshape for multi-head SSM.
+        # Reshape for multi-head SSM (per-rank heads).
         hidden_ssm = hidden_ssm.reshape(
-            batch, seq_len, self.num_heads, self.head_dim
+            batch, seq_len, self.num_heads_per_rank, self.head_dim
         )
-        B = B.reshape(batch, seq_len, self.n_groups, self.ssm_state_size)
-        C = C.reshape(batch, seq_len, self.n_groups, self.ssm_state_size)
+        B = B.reshape(batch, seq_len, self.n_groups_per_rank, self.ssm_state_size)
+        C = C.reshape(batch, seq_len, self.n_groups_per_rank, self.ssm_state_size)
 
-        # Repeat B, C from n_groups to num_heads.
-        heads_per_group = self.num_heads // self.n_groups
-        B = B.repeat_interleave(heads_per_group, dim=2)  # (B, L, H, N)
-        C = C.repeat_interleave(heads_per_group, dim=2)  # (B, L, H, N)
+        # Repeat B, C from n_groups_per_rank to num_heads_per_rank.
+        heads_per_group = self.num_heads_per_rank // self.n_groups_per_rank
+        B = B.repeat_interleave(heads_per_group, dim=2)  # (B, L, H_per_rank, N)
+        C = C.repeat_interleave(heads_per_group, dim=2)  # (B, L, H_per_rank, N)
 
-        # ---- 4. Prepare dt and A ----
-        A = -torch.exp(self.A_log.float())  # (H,)
-        dt = F.softplus(dt + self.dt_bias.float())  # (B, L, H)
+        # ---- 4. Prepare dt and A (per-rank heads) ----
+        A = -torch.exp(self.A_log.float())  # (H_per_rank,)
+        dt = F.softplus(dt + self.dt_bias.float())  # (B, L, H_per_rank)
         dt = dt.clamp(min=self.time_step_limit[0], max=self.time_step_limit[1])
 
-        # ---- 5. Chunked SSD scan ----
+        # ---- 5. Chunked SSD scan (per-rank) ----
         y = self._ssd_chunk_scan(hidden_ssm, B, C, dt, A)
-        # y: (B, L, H, head_dim)
+        # y: (B, L, H_per_rank, head_dim)
 
-        # Flatten heads: (B, L, intermediate_size)
-        y = y.reshape(batch, seq_len, self.intermediate_size)
+        # Flatten heads: (B, L, intermediate_size_per_rank)
+        y = y.reshape(batch, seq_len, self.intermediate_size_per_rank)
 
-        # ---- 6. Gated RMSNorm ----
+        # ---- 6. Gated RMSNorm (per-rank) ----
         y = self.norm(y, gate=gate)
 
         # ---- 7. MLP bypass (if d_mlp > 0) ----
         if self.d_mlp > 0:
             y = torch.cat([F.silu(mlp_z) * mlp_x, y], dim=-1)
 
-        # ---- 8. Output projection ----
-        out = self.out_proj(y)  # (B, L, D)
+        # ---- 8. Output projection (row-parallel: all-reduces across TP ranks) ----
+        out, _ = self.out_proj(y)  # (B, L, D)
 
         # Transpose back to NeoX seq-first layout: (L, B, D)
         out = out.transpose(0, 1).contiguous()
@@ -565,8 +607,13 @@ class ParallelMamba2ResidualLayer(nn.Module):
 
     def forward(self, x, attention_mask=None, layer_past=None):
         # x = x + mixer(norm(x))
+        if not hasattr(self, '_dbg') and torch.distributed.get_rank() == 0:
+            print(f'[FWD] Mamba2 layer {self.layer_number} start', flush=True)
         residual = x
         hidden_states = self.mixer(self.norm(x))
+        if not hasattr(self, '_dbg') and torch.distributed.get_rank() == 0:
+            print(f'[FWD] Mamba2 layer {self.layer_number} done', flush=True)
+            self._dbg = True
         return hidden_states + residual
 
 

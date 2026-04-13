@@ -23,6 +23,7 @@ import torch.nn as nn
 
 from megatron.model.norms import get_norm
 from megatron.model.activations import relu_squared
+from megatron.model.utils import get_parallel_linear
 
 
 class NemotronMLPResidualLayer(nn.Module):
@@ -37,6 +38,7 @@ class NemotronMLPResidualLayer(nn.Module):
         self,
         neox_args,
         init_method=None,
+        output_layer_init_method=None,
         layer_number=0,
     ):
         super().__init__()
@@ -62,29 +64,47 @@ class NemotronMLPResidualLayer(nn.Module):
                 "or 'moe_routed_intermediate_size' to be set in neox_args."
             )
 
-        self.up_proj = nn.Linear(
-            neox_args.hidden_size, intermediate_size, bias=False
-        )
-        self.down_proj = nn.Linear(
-            intermediate_size, neox_args.hidden_size, bias=False
+        if init_method is None:
+            init_method = nn.init.xavier_normal_
+        if output_layer_init_method is None:
+            output_layer_init_method = init_method
+
+        ColumnParallelLinear, RowParallelLinear = get_parallel_linear(neox_args)
+
+        # Up-projection: hidden_size -> intermediate_size (column-parallel)
+        self.up_proj = ColumnParallelLinear(
+            neox_args=neox_args,
+            input_size=neox_args.hidden_size,
+            output_size=intermediate_size,
+            gather_output=False,
+            init_method=init_method,
+            skip_bias_add=True,
+            bias=False,
         )
 
-        # Apply init method if provided
-        if init_method is not None:
-            init_method(self.up_proj.weight)
-            init_method(self.down_proj.weight)
+        # Down-projection: intermediate_size -> hidden_size (row-parallel)
+        self.down_proj = RowParallelLinear(
+            neox_args=neox_args,
+            input_size=intermediate_size,
+            output_size=neox_args.hidden_size,
+            input_is_parallel=True,
+            init_method=output_layer_init_method,
+            skip_bias_add=True,
+            bias=False,
+        )
 
     def forward(self, x, attention_mask=None, layer_past=None):
-        # x: [b, s, h]
+        # x: [s, b, h]
         residual = x
 
         # Pre-norm
         x = self.norm(x)
 
         # MLP: up_proj -> relu_squared -> down_proj
-        x = self.up_proj(x)
+        # Parallel linears return (output, bias) tuples
+        x, _ = self.up_proj(x)
         x = relu_squared(x)
-        x = self.down_proj(x)
+        x, _ = self.down_proj(x)
 
         # Dropout + residual
         output = (

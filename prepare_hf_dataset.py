@@ -122,6 +122,18 @@ def parse_args():
         help="Only count tokens, skip JSONL export and tokenization",
     )
     parser.add_argument(
+        "--chat-template",
+        action="store_true",
+        help="Use preprocess_data_with_chat_template.py for tokenization (produces loss masks for SFT). "
+             "Requires --tokenizer-path. Exports messages as JSONL and tokenizes with chat template.",
+    )
+    parser.add_argument(
+        "--tokenizer-path",
+        type=str,
+        default=None,
+        help="HuggingFace tokenizer directory for chat template tokenization (used with --chat-template)",
+    )
+    parser.add_argument(
         "--skip-chat-template",
         action="store_true",
         help="Stringify messages instead of applying chat template",
@@ -352,6 +364,61 @@ def run_preprocess_data(
     return True
 
 
+def run_preprocess_data_with_chat_template(
+    input_path: str,
+    output_prefix: str,
+    tokenizer_path: str,
+    workers: int,
+) -> bool:
+    """Run preprocess_data_with_chat_template.py via subprocess.
+
+    This produces both _messages_document.{bin,idx} (token IDs) and
+    _messages_label_document.{bin,idx} (loss masks for SFT training).
+    """
+    script_dir = Path(__file__).parent
+    preprocess_script = script_dir / "tools" / "datasets" / "preprocess_data_with_chat_template.py"
+
+    cmd = [
+        sys.executable,
+        str(preprocess_script),
+        "--input",
+        input_path,
+        "--output-prefix",
+        output_prefix,
+        "--tokenizer-path",
+        tokenizer_path,
+        "--jsonl-keys",
+        "messages",
+        "--dataset-impl",
+        "mmap",
+        "--workers",
+        str(workers),
+    ]
+
+    print(f"\nRunning chat template tokenization command:")
+    print(f"  {' '.join(cmd)}")
+    print()
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    for line in process.stdout:
+        print(f"[CHAT_TEMPLATE] {line}", end="")
+
+    process.wait()
+
+    if process.returncode != 0:
+        print(f"\nError: preprocess_data_with_chat_template.py failed with return code {process.returncode}")
+        return False
+
+    return True
+
+
 def main():
     args = parse_args()
 
@@ -540,33 +607,43 @@ def main():
 
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
-    jsonl_path = output_dir / "dataset.jsonl"
 
-    # Convert messages to text if needed
-    if is_messages:
-        if args.midtrain_chat_messages:
-            print("  Converting messages to plain text (midtrain_chat_messages mode)...")
-        else:
-            print(f"  Converting messages to text (skip_chat_template={args.skip_chat_template})...")
-        ds = ds.map(
-            lambda x: convert_messages_to_text(
-                x, text_column, hf_tokenizer, args.skip_chat_template,
-                midtrain_chat_messages=args.midtrain_chat_messages,
-            ),
-            num_proc=args.num_proc,
-            desc="Converting messages",
-        )
-        # After conversion, text column is 'text'
-        export_column = "text"
+    if args.chat_template and is_messages:
+        # For chat template tokenization, export messages as-is (not converted to text)
+        jsonl_path = output_dir / "messages.jsonl"
+        print(f"  Saving messages to {jsonl_path} (chat-template mode)...")
+        ds_export = ds.select_columns([text_column])
+        if text_column != "messages":
+            ds_export = ds_export.rename_column(text_column, "messages")
+        ds_export.to_json(str(jsonl_path))
     else:
-        export_column = text_column
+        jsonl_path = output_dir / "dataset.jsonl"
 
-    # Filter to just the text column and save
-    print(f"  Saving to {jsonl_path}...")
-    ds_export = ds.select_columns([export_column])
-    if export_column != "text":
-        ds_export = ds_export.rename_column(export_column, "text")
-    ds_export.to_json(str(jsonl_path))
+        # Convert messages to text if needed
+        if is_messages:
+            if args.midtrain_chat_messages:
+                print("  Converting messages to plain text (midtrain_chat_messages mode)...")
+            else:
+                print(f"  Converting messages to text (skip_chat_template={args.skip_chat_template})...")
+            ds = ds.map(
+                lambda x: convert_messages_to_text(
+                    x, text_column, hf_tokenizer, args.skip_chat_template,
+                    midtrain_chat_messages=args.midtrain_chat_messages,
+                ),
+                num_proc=args.num_proc,
+                desc="Converting messages",
+            )
+            # After conversion, text column is 'text'
+            export_column = "text"
+        else:
+            export_column = text_column
+
+        # Filter to just the text column and save
+        print(f"  Saving to {jsonl_path}...")
+        ds_export = ds.select_columns([export_column])
+        if export_column != "text":
+            ds_export = ds_export.rename_column(export_column, "text")
+        ds_export.to_json(str(jsonl_path))
 
     export_time = time.time() - export_start
     results["jsonl_path"] = str(jsonl_path)
@@ -576,6 +653,41 @@ def main():
     if args.skip_tokenize:
         print("\n[5/5] TOKENIZE - Skipped (--skip-tokenize)")
         results["tokenized"] = False
+    elif args.chat_template:
+        # Use chat template tokenizer (produces loss masks for SFT)
+        if not args.tokenizer_path:
+            print("\nError: --chat-template requires --tokenizer-path")
+            results["status"] = "failed"
+            results["error"] = "--chat-template requires --tokenizer-path"
+        else:
+            print("\n[5/5] TOKENIZE - Running chat template tokenization...")
+            tokenize_start = time.time()
+
+            dir_name = output_dir.name
+            output_prefix = str(output_dir / dir_name)
+
+            success = run_preprocess_data_with_chat_template(
+                input_path=str(jsonl_path),
+                output_prefix=output_prefix,
+                tokenizer_path=args.tokenizer_path,
+                workers=args.tokenize_workers,
+            )
+
+            tokenize_time = time.time() - tokenize_start
+            results["tokenized"] = success
+            results["tokenize_time"] = tokenize_time
+
+            if success:
+                bin_path = f"{output_prefix}_messages_document.bin"
+                label_bin_path = f"{output_prefix}_messages_label_document.bin"
+                results["bin_path"] = bin_path
+                results["label_bin_path"] = label_bin_path
+                print(f"\n  Tokenization complete in {tokenize_time:.1f}s")
+                print(f"  Output: {output_prefix}_messages_document.bin/.idx")
+                print(f"  Labels: {output_prefix}_messages_label_document.bin/.idx")
+            else:
+                results["status"] = "failed"
+                results["error"] = "Chat template tokenization failed"
     else:
         print("\n[5/5] TOKENIZE - Running GPT-NeoX tokenization...")
         tokenize_start = time.time()
@@ -627,9 +739,16 @@ def main():
 
     if results["status"] == "completed" and results.get("tokenized"):
         dir_name = output_dir.name
-        data_path = f"{output_dir}/{dir_name}_text_document"
-        print(f"\nFor GPT-NeoX training config:")
-        print(f'  "train_data_paths": ["{data_path}"]')
+        if args.chat_template:
+            data_path = f"{output_dir}/{dir_name}_messages_document"
+            label_path = f"{output_dir}/{dir_name}_messages_label_document"
+            print(f"\nFor GPT-NeoX SFT training config:")
+            print(f'  "train_data_paths": ["{data_path}"]')
+            print(f'  "train_label_data_paths": ["{label_path}"]')
+        else:
+            data_path = f"{output_dir}/{dir_name}_text_document"
+            print(f"\nFor GPT-NeoX training config:")
+            print(f'  "train_data_paths": ["{data_path}"]')
 
     return 0 if results["status"] == "completed" else 1
 
